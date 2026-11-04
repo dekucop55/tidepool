@@ -294,13 +294,13 @@ async function main() {
   });
 
   await test('resource limits: rate limit, match ceiling, socket ceiling', async () => {
-    // Rate limit: hammer one endpoint from one IP and expect 429s.
+    // Rate limit: hammer a write endpoint from one IP and expect 429s.
     let limited = 0;
     for (let i = 0; i < 80; i++) {
-      const r = await req('GET', '/api/match/ZZZZ');
+      const r = await req('POST', '/api/match', { name: 'Burst' + i });
       if (r.status === 429) limited++;
     }
-    assert.ok(limited > 0, 'a burst of requests from one IP must be throttled');
+    assert.ok(limited > 0, 'a burst of writes from one IP must be throttled');
 
     // Socket ceiling: open more WebSockets than a match allows.
     const created = await req('POST', '/api/match', { name: 'Caps' });
@@ -334,6 +334,32 @@ async function main() {
     socks.forEach(s2 => { try { s2.destroy(); } catch (_) {} });
     assert.ok(accepted <= 8, 'a match must not accept unlimited sockets (got ' + accepted + ')');
     assert.ok(refused > 0, 'extra sockets must be refused');
+  });
+
+  await test('polling the board is never throttled, but flooding still is', async () => {
+    const c = await req('POST', '/api/match', { name: 'Throttle' });
+    const code = c.body.code;
+    const pid = c.body.playerId;
+
+    // Exhaust the write budget by creating matches.
+    let writes = 0;
+    for (let i = 0; i < 70; i++) {
+      const r = await req('POST', '/api/match', { name: 'F' + i });
+      if (r.status === 429) writes++;
+    }
+    assert.ok(writes > 0, 'flooding match creation must still be throttled');
+
+    // Reads must survive that: polling the board is how you play.
+    let reads = 0;
+    for (let i = 0; i < 200; i++) {
+      const r = await req('GET', '/api/match/' + code + '?playerId=' + pid);
+      if (r.status === 429) reads++;
+    }
+    assert.strictEqual(reads, 0,
+      'a player polling their own board must never be throttled out of the game');
+
+    const h = await req('GET', '/health');
+    assert.strictEqual(h.status, 200);
   });
 
   console.log('\n' + passed + ' passed, ' + failed + ' failed\n');

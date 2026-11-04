@@ -176,7 +176,8 @@ everyone else. They are generous for normal play and only bite on abuse:
 
 | Limit | Value |
 |---|---|
-| Requests per IP | 60 per 10s window (`429` when exceeded) |
+| Writes per IP | 60 per 10s window (`429` when exceeded) |
+| Reads per IP | 600 per 10s window — polling the board is how you play, so it is never throttled out of a game |
 | Live matches in memory | 200 (`503` when full) |
 | WebSocket connections per match | 8 (`403` when exceeded) |
 | Request body | 1 MB |

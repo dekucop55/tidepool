@@ -153,11 +153,15 @@ const SWEEP_MS = 5 * 60 * 1000;      // check every 5 minutes
 const MAX_MATCHES = 200;          // hard ceiling on live matches in memory
 const MAX_SOCKETS_PER_MATCH = 8;  // a 4-player game plus a few spectators
 const RATE_WINDOW_MS = 10 * 1000; // sliding window
-const RATE_MAX_PER_WINDOW = 60;   // requests per IP per window
+const RATE_MAX_PER_WINDOW = 60;   // writes per IP per window
+// Reads (polling the board) are the normal way to play, so they get a much
+// larger budget. A player polling once a second for a 12-round match makes
+// several hundred requests and must not be throttled out of their own game.
+const RATE_MAX_READS_PER_WINDOW = 600;
 
 const rateBuckets = new Map(); // ip -> { count, resetAt }
 
-function rateLimited(ip) {
+function rateLimited(ip, limit) {
   const now = Date.now();
   let b = rateBuckets.get(ip);
   if (!b || now >= b.resetAt) {
@@ -165,7 +169,7 @@ function rateLimited(ip) {
     rateBuckets.set(ip, b);
   }
   b.count += 1;
-  return b.count > RATE_MAX_PER_WINDOW;
+  return b.count > limit;
 }
 
 function clientIp(req) {
@@ -312,11 +316,16 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === 'OPTIONS') return json(res, 204, {});
 
-  // Unauthenticated API: throttle per IP before doing any work. Static files
-  // and health checks are exempt so a page load is never blocked.
+  // Unauthenticated API: throttle per IP before doing any work. Reads get a
+  // much larger budget than writes, because polling the board is the normal
+  // way to play — a player who polls once a second for a 12-round match makes
+  // hundreds of requests and must never be throttled out of their own game.
   const ip = clientIp(req);
-  const isStatic = req.method === 'GET' && (p === '/' || p === '/index.html' || p === '/health');
-  if (!isStatic && rateLimited(ip)) {
+  const isRead = req.method === 'GET' &&
+    (p === '/' || p === '/index.html' || p === '/health' ||
+     /^\/api\/match\/[A-Z2-9]{4}(\/replay|\/verify)?$/.test(p));
+  const limit = isRead ? RATE_MAX_READS_PER_WINDOW : RATE_MAX_PER_WINDOW;
+  if (rateLimited(ip, limit)) {
     return json(res, 429, { error: 'too many requests, slow down' });
   }
 
