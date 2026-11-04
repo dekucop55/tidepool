@@ -19,7 +19,7 @@ test('creates 25 cells with nutrient 1-5', () => {
   for (const c of m.cells) {
     assert.ok(c.nutrient >= 1 && c.nutrient <= 5, 'nutrient out of range: ' + c.nutrient);
     assert.strictEqual(c.owner, null);
-    assert.strictEqual(c.revealed, false);
+    assert.strictEqual(c.seenBy.size, 0);
   }
 });
 
@@ -58,7 +58,7 @@ test('claim on a free cell succeeds and reveals nutrient', () => {
   engine.resolveRound(m);
   assert.strictEqual(target.owner, 'a');
   assert.strictEqual(target.score, target.nutrient);
-  assert.strictEqual(target.revealed, true);
+  assert.ok(target.seenBy.has('a'), 'claiming marks the cell as seen by that player');
 });
 
 test('contested claim fails for both', () => {
@@ -267,7 +267,7 @@ test('match ends at max rounds with a winner or draw', () => {
   assert.ok(m.round <= m.maxRounds + 1);
 });
 
-test('public state hides unrevealed nutrients', () => {
+test('public state hides nutrients you have not held yourself', () => {
   const m = engine.createMatch({ seed: 3 });
   engine.addPlayer(m, { id: 'a', name: 'A' });
   engine.addPlayer(m, { id: 'b', name: 'B' });
@@ -282,6 +282,14 @@ test('public state hides unrevealed nutrients', () => {
   assert.ok(claimed.nutrient !== null, 'claimed cell should be revealed');
   const other = st2.board.find(c => c.x === 1 && c.y === 1);
   assert.strictEqual(other.nutrient, null, 'unclaimed stays hidden');
+  // The opponent's claim must not leak its nutrient to us.
+  const theirs = st2.board.find(c => c.x === 0 && c.y === 0);
+  assert.strictEqual(theirs.nutrient, null,
+    "an opponent's claim must not reveal that cell's nutrient to you");
+  // And from their side, our cell is hidden but theirs is visible.
+  const stB = engine.publicState(m, 'b');
+  assert.ok(stB.board.find(c => c.x === 0 && c.y === 0).nutrient !== null);
+  assert.strictEqual(stB.board.find(c => c.x === 2 && c.y === 2).nutrient, null);
 });
 
 test('replay contains full log', () => {

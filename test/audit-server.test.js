@@ -263,6 +263,36 @@ async function main() {
     assert.strictEqual(vAnon.status, 403);
   });
 
+  await test('each player only sees the nutrients of cells they have held', async () => {
+    const c = await req('POST', '/api/match', { name: 'Iso' });
+    const code = c.body.code;
+    const a = c.body.playerId;
+    const j = await req('POST', '/api/match/' + code + '/join', { name: 'B' });
+    const b = j.body.playerId;
+    await req('POST', '/api/match/' + code + '/start', {});
+
+    await req('POST', '/api/match/' + code + '/action', { playerId: a, action: 'claim', x: 0, y: 0 });
+    await req('POST', '/api/match/' + code + '/action', { playerId: b, action: 'claim', x: 4, y: 4 });
+
+    const fromA = await req('GET', '/api/match/' + code + '?playerId=' + a);
+    const fromB = await req('GET', '/api/match/' + code + '?playerId=' + b);
+    const anon = await req('GET', '/api/match/' + code);
+
+    const mine = fromA.body.board.find(c2 => c2.x === 0 && c2.y === 0);
+    const theirs = fromA.body.board.find(c2 => c2.x === 4 && c2.y === 4);
+    assert.ok(mine.nutrient !== null, 'you see the nutrient of a cell you claimed');
+    assert.strictEqual(theirs.nutrient, null,
+      "the opponent's claim must not reveal that cell's nutrient to you");
+
+    const mineB = fromB.body.board.find(c2 => c2.x === 4 && c2.y === 4);
+    const theirsB = fromB.body.board.find(c2 => c2.x === 0 && c2.y === 0);
+    assert.ok(mineB.nutrient !== null);
+    assert.strictEqual(theirsB.nutrient, null);
+
+    assert.ok(anon.body.board.every(c2 => c2.nutrient === null),
+      'an anonymous viewer must see no nutrients at all');
+  });
+
   await test('resource limits: rate limit, match ceiling, socket ceiling', async () => {
     // Rate limit: hammer one endpoint from one IP and expect 429s.
     let limited = 0;

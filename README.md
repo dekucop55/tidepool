@@ -162,7 +162,8 @@ scores match the recorded ones exactly.
 | `POST` | `/api/match` | create a match, returns `code` + `playerId` |
 | `POST` | `/api/match/:code/join` | join; `asBot:true` adds a bot |
 | `POST` | `/api/match/:code/start` | start (fills empty seats with bots) |
-| `GET` | `/api/match/:code` | public state |
+| `GET` | `/api/match/:code` | public state — anonymous, every nutrient hidden |
+| `GET` | `/api/match/:code?playerId=...` | the same board from that player's view |
 | `POST` | `/api/match/:code/action` | submit `claim` or `feed` |
 | `GET` | `/api/match/:code/replay` | seed + nutrients + full log — **only after the match ends, and only for a player who was in it** (`?playerId=...`) |
 | `GET` | `/api/match/:code/verify` | re-simulates the replay and reports whether it matches — same gating as `replay` |
@@ -183,7 +184,7 @@ everyone else. They are generous for normal play and only bite on abuse:
 Static files and `/health` are never rate limited, so loading the page always
 works.
 
-- Poll `GET /api/match/:code` no faster than once per second.
+- Poll `GET /api/match/:code?playerId=...` no faster than once per second.
 - If you stop polling for 10 seconds you are marked AFK and the match plays on
   without you. Come back and keep submitting — you rejoin automatically.
 - Matches are held in memory. They are gone when the server restarts.

@@ -76,8 +76,15 @@ function wsDecode(buf) {
 function broadcast(code, obj) {
   const set = sockets.get(code);
   if (!set) return;
-  const msg = wsEncode(JSON.stringify(obj));
   for (const ws of set) {
+    // Each socket belongs to one player, and a cell's nutrient is only visible
+    // to someone who has held it. Sending one shared board would leak the
+    // hidden layout to every spectator, so build the state per recipient.
+    const viewer = ws._playerId || null;
+    const payload = obj && obj.state !== undefined
+      ? Object.assign({}, obj, { state: engine.publicState(matches.get(code), viewer) })
+      : obj;
+    const msg = wsEncode(JSON.stringify(payload));
     // A full socket buffer makes write() return false and drop data silently.
     // Pause and resume on drain instead of pretending the send succeeded.
     try {
@@ -368,11 +375,14 @@ const server = http.createServer(async (req, res) => {
   }
 
   // GET /api/match/:code -> public state
+  // Pass ?playerId=... to get the board from that player's point of view;
+  // without it the state is anonymous and every nutrient stays hidden.
   mm = p.match(/^\/api\/match\/([A-Z2-9]{4})$/);
   if (req.method === 'GET' && mm) {
     const m = matches.get(mm[1]);
     if (!m) return json(res, 404, { error: 'match not found' });
-    return json(res, 200, engine.publicState(m));
+    const viewer = u.searchParams.get('playerId');
+    return json(res, 200, engine.publicState(m, viewer && engine.playerById(m, viewer) ? viewer : null));
   }
 
   // POST /api/match/:code/action  {playerId, action, x, y}
@@ -464,6 +474,9 @@ server.on('upgrade', (req, socket) => {
   );
   if (!sockets.has(code)) sockets.set(code, new Set());
   sockets.get(code).add(socket);
+  // The client announces who it is so broadcasts can be filtered per player.
+  const who = u.searchParams.get('playerId');
+  if (who) socket._playerId = who;
   socket.on('data', buf => {
     const msg = wsDecode(buf);
     if (!msg) return;
@@ -471,6 +484,14 @@ server.on('upgrade', (req, socket) => {
     if (msg.type === 'ping') {
       // Answer a ping with a pong so the connection is not dropped.
       try { socket.write(Buffer.from([0x8a, 0x00])); } catch (_) {}
+      return;
+    }
+    // A text frame may carry the player's identity if it was not in the URL.
+    if (msg.type === 'text') {
+      try {
+        const d = JSON.parse(msg.data);
+        if (d && typeof d.playerId === 'string') socket._playerId = d.playerId;
+      } catch (_) { /* not JSON, nothing to learn from it */ }
     }
   });
   socket.on('close', () => {

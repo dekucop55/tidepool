@@ -43,7 +43,10 @@ function createMatch(opts) {
       x: i % SIZE,
       y: Math.floor(i / SIZE),
       nutrient: 1 + Math.floor(rng() * 5),
-      revealed: false,
+      // Which players have ever owned this cell. A nutrient is secret until
+      // you have held the cell yourself; this is per-player so one claim does
+      // not reveal the board to everybody.
+      seenBy: new Set(),
       owner: null,
       score: 0
     });
@@ -175,8 +178,8 @@ function resolveRound(m) {
       events.push({ type: 'claim_fail', player: pid, x: a.x, y: a.y, reason: 'contested' });
     } else {
       cell.owner = pid;
+      cell.seenBy.add(pid);
       cell.score = cell.nutrient;
-      cell.revealed = true;
       events.push({ type: 'claim', player: pid, x: a.x, y: a.y, value: cell.nutrient });
     }
   }
@@ -220,8 +223,8 @@ function resolveRound(m) {
       cell.score -= 1;
       if (cell.score === 0) {
         cell.owner = null;
-        // The cell is neutral again, so its nutrient is hidden once more.
-        cell.revealed = false;
+        // The cell is neutral again, but `seenBy` is permanent: you keep what
+        // you learned. Only someone who never held it still sees null.
         washed.push({ x: cell.x, y: cell.y });
       }
     }
@@ -282,12 +285,14 @@ function resolveRound(m) {
 // ---- Views ----
 
 function publicState(m, forPlayerId) {
-  // A cell's nutrient is visible only to a player who has owned it. `revealed`
-  // is reset when a cell washes out, so a cell you never held stays hidden even
-  // after an opponent has held and lost it.
+  // A cell's nutrient is visible only to a player who has owned it. Visibility
+  // is tracked per player (`seenBy`), not globally: otherwise the first person
+  // to claim a cell reveals its nutrient to everyone, and the hidden board
+  // stops being hidden. A cell you never held stays hidden even after an
+  // opponent has held and lost it.
   const board = m.cells.map(c => ({
     x: c.x, y: c.y,
-    nutrient: c.revealed ? c.nutrient : null,
+    nutrient: (forPlayerId && c.seenBy && c.seenBy.has(forPlayerId)) ? c.nutrient : null,
     owner: c.owner,
     score: c.owner !== null ? c.score : null
   }));

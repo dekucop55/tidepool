@@ -111,11 +111,21 @@ async function main() {
       { playerId: global.__pid2, action: 'claim', x: 0, y: 0 });
     assert.strictEqual(r.status, 200);
     await sleep(150);
-    const st = await req('GET', '/api/match/' + global.__code);
+    // Ask for the state as the first player: their own claim is visible.
+    const st = await req('GET', '/api/match/' + global.__code + '?playerId=' + global.__pid);
     assert.ok(st.body.round >= 2, 'round should have advanced');
     const claimed = st.body.board.find(c => c.x === 2 && c.y === 2);
     assert.strictEqual(claimed.owner, global.__pid);
-    assert.ok(claimed.nutrient !== null, 'claimed cell should be revealed');
+    assert.ok(claimed.nutrient !== null, 'your own claim should be revealed');
+    // The other player's claim must stay hidden from us.
+    const theirs = st.body.board.find(c => c.x === 0 && c.y === 0);
+    assert.strictEqual(theirs.owner, global.__pid2);
+    assert.strictEqual(theirs.nutrient, null,
+      "an opponent's claim must not reveal that cell's nutrient");
+    // An anonymous viewer sees no nutrients at all.
+    const anon = await req('GET', '/api/match/' + global.__code);
+    assert.ok(anon.body.board.every(c => c.nutrient === null),
+      'anonymous state must hide every nutrient');
   });
 
   await test('GET replay returns the log for a player of a finished match', async () => {

@@ -137,7 +137,7 @@ code{background:#0e1626;padding:2px 5px;border-radius:4px;font-size:12px}
         <div class="card" style="padding:12px">
           <div style="font-size:12px;color:var(--dim);margin-bottom:6px">Agent API</div>
           <div class="rules">
-            <code>GET /api/match/CODE</code> state<br>
+            <code>GET /api/match/CODE?playerId=...</code> state<br>
             <code>POST /api/match/CODE/action</code><br>
             <code>{"playerId","action":"claim|feed","x","y"}</code><br>
             <code>GET /api/match/CODE/replay</code> full log
@@ -298,7 +298,8 @@ function enterGame(){
 function connectWs(){
   if(S.ws) { try{S.ws.close();}catch(e){} }
   var proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
-  var ws = new WebSocket(proto + location.host + apiPath('/ws/' + S.code));
+  // Announce who we are so the server can filter the board per player.
+  var ws = new WebSocket(proto + location.host + apiPath('/ws/' + S.code) + '?playerId=' + S.playerId);
   S.ws = ws;
   ws.onmessage = function(ev){
     var msg;
@@ -331,7 +332,9 @@ function nameOf(pid){
 }
 
 function refresh(){
-  api('GET','/api/match/'+S.code).then(function(st){ S.state = st; render(); });
+  // Ask for the board from this player's point of view, otherwise every
+  // nutrient comes back hidden and the board looks empty.
+  api('GET','/api/match/'+S.code+'?playerId='+S.playerId).then(function(st){ S.state = st; render(); });
 }
 
 function render(){

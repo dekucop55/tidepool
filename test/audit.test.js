@@ -40,7 +40,7 @@ test('a washed-out cell hides its nutrient again', () => {
   engine.resolveRound(m);
   const cell = m.cells[idx(target.x, target.y)];
   assert.strictEqual(cell.owner, null, 'cell should have washed out');
-  assert.strictEqual(cell.revealed, false, 'revealed must reset on wash-out');
+  assert.strictEqual(cell.owner, null, 'wash-out must clear ownership');
   // and nobody may see its nutrient
   const st = engine.publicState(m, 'b');
   assert.strictEqual(st.board[idx(target.x, target.y)].nutrient, null,
@@ -86,8 +86,8 @@ test('wash outcome does not depend on cell iteration order', () => {
     const target = m.cells.find(c => c.nutrient === 1);
     const nb = m.cells.find(c =>
       c.i !== target.i && Math.abs(c.x - target.x) + Math.abs(c.y - target.y) === 1);
-    target.owner = 'a'; target.score = 1; target.revealed = true;
-    nb.owner = 'b'; nb.score = 1; nb.revealed = true;
+    target.owner = 'a'; target.score = 1; target.seenBy.add('a');
+    nb.owner = 'b'; nb.score = 1; nb.seenBy.add('b');
     m.cells = order.slice().sort((x, y) => x.i - y.i);
     engine.resolveRound(m);
     return m.cells.map(c => c.owner);
@@ -152,8 +152,8 @@ test('feeding shields a cell from the wash that would have freed it', () => {
     const c1 = m.cells.find(c => c.nutrient === 1);
     const nb = m.cells.find(c =>
       c.i !== c1.i && Math.abs(c.x - c1.x) + Math.abs(c.y - c1.y) === 1);
-    c1.owner = 'a'; c1.score = 1; c1.revealed = true;
-    nb.owner = 'b'; nb.score = 3; nb.revealed = true;
+    c1.owner = 'a'; c1.score = 1; c1.seenBy.add('a');
+    nb.owner = 'b'; nb.score = 3; nb.seenBy.add('b');
     return { m, c1 };
   }
 
