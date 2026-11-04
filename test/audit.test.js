@@ -141,5 +141,84 @@ test('replay still exposes the true nutrient layout for verification', () => {
   for (const n of rep.nutrients) assert.ok(n >= 1 && n <= 5);
 });
 
+test('feeding shields a cell from the wash that would have freed it', () => {
+  // Build a board where a 1-point cell sits next to an enemy. Feeding it must
+  // keep it alive; not feeding it must let it wash out.
+  function setup() {
+    const m = engine.createMatch({ seed: 7 });
+    engine.addPlayer(m, { id: 'a', name: 'A' });
+    engine.addPlayer(m, { id: 'b', name: 'B' });
+    engine.startMatch(m);
+    const c1 = m.cells.find(c => c.nutrient === 1);
+    const nb = m.cells.find(c =>
+      c.i !== c1.i && Math.abs(c.x - c1.x) + Math.abs(c.y - c1.y) === 1);
+    c1.owner = 'a'; c1.score = 1; c1.revealed = true;
+    nb.owner = 'b'; nb.score = 3; nb.revealed = true;
+    return { m, c1 };
+  }
+
+  const fed = setup();
+  engine.submitAction(fed.m, 'a', { action: 'feed', x: fed.c1.x, y: fed.c1.y });
+  fed.m.players[1].connected = false;
+  engine.resolveRound(fed.m);
+  assert.strictEqual(fed.m.cells[fed.c1.i].owner, 'a',
+    'a fed cell must survive the wash');
+  assert.strictEqual(fed.m.cells[fed.c1.i].score, 2, 'feed adds 1 point');
+
+  const unfed = setup();
+  engine.submitAction(unfed.m, 'a', { action: 'claim', x: 0, y: 0 });
+  unfed.m.players[1].connected = false;
+  engine.resolveRound(unfed.m);
+  assert.strictEqual(unfed.m.cells[unfed.c1.i].owner, null,
+    'the same cell must wash out when not fed');
+});
+
+test('two bots never deadlock at 0-0', () => {
+  // Two bots with identical information must not pick the same cell every
+  // round and both fail forever. This was a real bug: matches ended 0-0.
+  const bot = require('../server/bot');
+  let deadlocks = 0;
+  for (let seed = 1; seed <= 25; seed++) {
+    const m = engine.createMatch({ seed });
+    engine.addPlayer(m, { id: 'bot_aaaa', name: 'A' });
+    engine.addPlayer(m, { id: 'bot_bbbb', name: 'B' });
+    engine.startMatch(m);
+    while (m.status === 'playing' && m.round <= m.maxRounds + 1) {
+      for (const p of m.players) {
+        const st = engine.publicState(m, p.id);
+        engine.submitAction(m, p.id, bot.chooseAction(st, p.id));
+      }
+      engine.resolveRound(m);
+    }
+    const total = m.players.reduce((s, p) => s + p.score, 0);
+    if (total === 0) deadlocks++;
+  }
+  assert.strictEqual(deadlocks, 0,
+    deadlocks + ' of 25 bot matches ended 0-0 — the bots are deadlocking');
+});
+
+test('the bot produces a legal action for every board it sees', () => {
+  const bot = require('../server/bot');
+  for (let seed = 1; seed <= 20; seed++) {
+    const m = engine.createMatch({ seed });
+    engine.addPlayer(m, { id: 'a', name: 'A' });
+    engine.addPlayer(m, { id: 'b', name: 'B' });
+    engine.startMatch(m);
+    for (let r = 0; r < 5 && m.status === 'playing'; r++) {
+      for (const p of m.players) {
+        const st = engine.publicState(m, p.id);
+        const act = bot.chooseAction(st, p.id);
+        assert.ok(act && (act.action === 'claim' || act.action === 'feed'),
+          'bot returned an illegal action: ' + JSON.stringify(act));
+        assert.ok(engine.inBounds(act.x, act.y), 'bot moved out of bounds');
+        const r2 = engine.submitAction(m, p.id, act);
+        assert.strictEqual(r2.ok, true,
+          'bot action was rejected: ' + JSON.stringify(act) + ' -> ' + JSON.stringify(r2));
+      }
+      engine.resolveRound(m);
+    }
+  }
+});
+
 console.log('\n' + passed + ' passed, ' + failed + ' failed\n');
 process.exit(failed ? 1 : 0);

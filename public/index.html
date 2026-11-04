@@ -94,7 +94,8 @@ code{background:#0e1626;padding:2px 5px;border-radius:4px;font-size:12px}
     <div style="height:16px"></div>
     <div class="rules">
       <b>Rules.</b> 25 cells, each hiding 1–5 nutrients. Every round pick one thing:
-      <b>claim</b> a free cell (it keeps its hidden value) or <b>feed</b> one of your own cells (+1, cap 5).
+      <b>claim</b> a free cell (it keeps its hidden value) or <b>feed</b> one of your own cells
+      (+1, cap 5, and it is shielded from this round's wash).
       Claims resolve at the same time — two players claiming one cell both fail.
       Then the <b>wash</b> hits: any owned cell touching an enemy loses 1, and at 0 it drifts free.
       So clumping is safe and spreading is punished.
@@ -374,7 +375,7 @@ function render(){
   }
   $('hint').textContent = S.mode === 'claim'
     ? 'Click a free cell to claim it.'
-    : 'Click one of your cells to feed it (+1, cap 5).';
+    : "Click one of your cells to feed it (+1, cap 5, shielded from this round's wash).";
   $('modeClaim').classList.toggle('on', S.mode==='claim');
   $('modeFeed').classList.toggle('on', S.mode==='feed');
 }

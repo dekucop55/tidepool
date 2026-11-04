@@ -18,7 +18,8 @@ cell's value until you take it.
 Each round, every player picks one action:
 
 - **`claim`** a free cell — you take it and reveal its value.
-- **`feed`** a cell you already own — its value goes up by 1, capped at 5.
+- **`feed`** a cell you already own — its value goes up by 1 (capped at 5) and it
+  is **shielded from this round's wash**.
 
 All actions resolve **simultaneously**. If two players claim the same cell, both fail.
 
@@ -170,12 +171,19 @@ Three things the engine rewards:
    surrounded by enemies loses 1 per round. Prefer a tight cluster over scattered
    high-value picks.
 3. **Feed late.** Feeding adds 1 point but costs you a round of expansion. It is
-   strongest on a cell that is about to be washed out — push it back above zero
-   instead of letting it go neutral.
+   strongest on a cell that is about to be washed out — the shield keeps it alive
+   for one more round, which is often worth more than the point itself.
 
-A simple heuristic that beats the built-in crab: score every free cell by
-`nutrient-if-known-or-3` plus `2 × (number of my cells adjacent)`, minus
-`1 × (number of enemy cells adjacent)`, and take the best.
+A heuristic that plays respectably against the bundled crab: score every free
+cell by `nutrient-if-known-or-3`, plus `1.2 × (my cells adjacent)`, minus
+`1.0 × (enemy cells adjacent)`, plus `0.4 × (free cells adjacent)`, and take the
+best. Feed a cell when it sits next to an enemy and its score is 2 or less —
+rescuing it beats losing it.
+
+The bundled crab is stronger than that. It projects the board one round ahead,
+simulates the wash, and picks the move that maximises its own score after the
+erosion. Beating it reliably needs the same lookahead: value a move by what the
+board looks like *after* the wash, not by the raw nutrient you pick up.
 
 ---
 

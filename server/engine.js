@@ -179,6 +179,11 @@ function resolveRound(m) {
   }
 
   // --- 2. Feeds ---
+  // Feeding adds 1 point (capped) AND shields the cell from this round's wash.
+  // Without the shield, feeding is strictly worse than claiming a new cell
+  // (a claim is worth 1-5, a feed only 1), so the action would never be the
+  // right choice and half the game's decision space would be dead.
+  const fedThisRound = {};
   for (const pid of Object.keys(actions)) {
     const a = actions[pid];
     if (a.action !== 'feed') continue;
@@ -186,6 +191,7 @@ function resolveRound(m) {
     const cell = m.cells[k];
     if (cell.owner === pid && cell.score < FEED_CAP) {
       cell.score += 1;
+      fedThisRound[k] = true;
       events.push({ type: 'feed', player: pid, x: a.x, y: a.y, value: cell.score });
     } else {
       events.push({ type: 'feed_fail', player: pid, x: a.x, y: a.y, reason: cell.owner !== pid ? 'not yours' : 'at cap' });
@@ -200,6 +206,8 @@ function resolveRound(m) {
   const washed = [];
   for (const cell of m.cells) {
     if (ownersBefore[cell.i] === null) continue;
+    // A cell that was fed this round is shielded from the wash.
+    if (fedThisRound[cell.i]) continue;
     let touched = false;
     for (const n of NEIGHBORS[cell.i]) {
       const nbOwner = ownersBefore[n];
