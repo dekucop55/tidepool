@@ -1,0 +1,13 @@
+{
+  "name": "tidepool",
+  "version": "1.0.0",
+  "description": "Tide Pool - a 2-4 player turn-based territory game for humans and AI agents",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "test": "node test/engine.test.js",
+    "bot": "node server/bot.js"
+  },
+  "engines": { "node": ">=18" },
+  "license": "MIT"
+}

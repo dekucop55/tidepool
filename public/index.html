@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tide Pool</title>
+<style>
+:root{
+  --bg:#0b1220; --panel:#131c2e; --line:#243049; --ink:#e8eef8; --dim:#8fa3c0;
+  --accent:#4dd0e1; --good:#aed581; --bad:#ef5350; --warn:#ffb74d;
+}
+*{box-sizing:border-box}
+body{margin:0;font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--ink)}
+.wrap{max-width:1080px;margin:0 auto;padding:16px}
+h1{font-size:22px;margin:0 0 4px}
+h1 .tag{font-size:12px;font-weight:400;color:var(--dim);margin-left:8px}
+.sub{color:var(--dim);font-size:13px;margin-bottom:16px}
+.row{display:flex;gap:16px;flex-wrap:wrap}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px}
+#board{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;width:min(92vw,420px)}
+.cell{aspect-ratio:1;border:1px solid var(--line);border-radius:8px;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;cursor:pointer;position:relative;background:#0e1626;
+  transition:transform .08s, box-shadow .08s;user-select:none}
+.cell:hover{transform:translateY(-2px);box-shadow:0 4px 14px rgba(0,0,0,.4)}
+.cell .n{font-size:11px;color:var(--dim)}
+.cell .s{font-size:20px;font-weight:600}
+.cell.mine{box-shadow:inset 0 0 0 2px currentColor}
+.cell .dot{position:absolute;top:4px;left:6px;font-size:10px;color:var(--dim)}
+.side{flex:1;min-width:260px;display:flex;flex-direction:column;gap:12px}
+.pl{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;background:#0e1626;border:1px solid var(--line)}
+.pl .sw{width:12px;height:12px;border-radius:3px;flex:none}
+.pl .nm{flex:1;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pl .sc{font-weight:600;font-size:14px}
+.pl .ck{font-size:11px;color:var(--good)}
+.pl.you{border-color:var(--accent)}
+button{font:inherit;padding:9px 14px;border-radius:8px;border:1px solid var(--line);
+  background:#1b2740;color:var(--ink);cursor:pointer}
+button:hover{background:#243354}
+button.primary{background:var(--accent);color:#04222a;border-color:transparent;font-weight:600}
+button:disabled{opacity:.45;cursor:not-allowed}
+input{font:inherit;padding:9px 12px;border-radius:8px;border:1px solid var(--line);background:#0e1626;color:var(--ink);width:100%}
+label{font-size:12px;color:var(--dim);display:block;margin-bottom:4px}
+#log{height:180px;overflow:auto;font-size:12px;color:var(--dim);background:#0e1626;
+  border:1px solid var(--line);border-radius:8px;padding:8px;white-space:pre-wrap}
+.modes{display:flex;gap:8px;margin-bottom:12px}
+.modes button{flex:1}
+.modes button.on{background:var(--accent);color:#04222a;border-color:transparent;font-weight:600}
+.hide{display:none!important}
+.banner{padding:10px 12px;border-radius:8px;background:#1b2740;border:1px solid var(--line);font-size:13px}
+.banner.win{background:rgba(174,213,129,.15);border-color:var(--good)}
+.banner.lose{background:rgba(239,83,80,.12);border-color:var(--bad)}
+code{background:#0e1626;padding:2px 5px;border-radius:4px;font-size:12px}
+.rules{font-size:12px;color:var(--dim);line-height:1.7}
+.rules b{color:var(--ink)}
+@media(max-width:760px){.row{flex-direction:column}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Tide Pool <span class="tag">2–4 players · turn-based · humans &amp; agents</span></h1>
+  <div class="sub">Claim cells, cluster them, survive the wash. Highest score when the board fills or 20 rounds run out.</div>
+
+  <!-- LOBBY -->
+  <div id="lobby" class="card">
+    <div class="modes">
+      <button id="mCreate" class="on">Create match</button>
+      <button id="mJoin">Join with code</button>
+      <button id="mBot">Watch bots</button>
+    </div>
+
+    <div id="paneCreate">
+      <label>Your name</label>
+      <input id="nameCreate" placeholder="Player" maxlength="24">
+      <div style="height:12px"></div>
+      <button class="primary" id="btnCreate">Create</button>
+    </div>
+
+    <div id="paneJoin" class="hide">
+      <label>Match code</label>
+      <input id="codeJoin" placeholder="ABCD" maxlength="4" style="text-transform:uppercase">
+      <div style="height:8px"></div>
+      <label>Your name</label>
+      <input id="nameJoin" placeholder="Player" maxlength="24">
+      <div style="height:12px"></div>
+      <button class="primary" id="btnJoin">Join</button>
+    </div>
+
+    <div id="paneBot" class="hide">
+      <div class="rules">Spawns a match with bots only and starts it immediately. Good for seeing the rules in motion.</div>
+      <div style="height:12px"></div>
+      <button class="primary" id="btnBot">Start bot match</button>
+    </div>
+
+    <div style="height:16px"></div>
+    <div class="rules">
+      <b>Rules.</b> 25 cells, each hiding 1–5 nutrients. Every round pick one thing:
+      <b>claim</b> a free cell (it keeps its hidden value) or <b>feed</b> one of your own cells (+1, cap 5).
+      Claims resolve at the same time — two players claiming one cell both fail.
+      Then the <b>wash</b> hits: any owned cell touching an enemy loses 1, and at 0 it drifts free.
+      So clumping is safe and spreading is punished.
+    </div>
+  </div>
+
+  <!-- WAITING -->
+  <div id="waiting" class="card hide">
+    <div class="banner">Match <code id="wCode"></code> — share this code. Waiting for players…</div>
+    <div style="height:12px"></div>
+    <div id="wPlayers"></div>
+    <div style="height:12px"></div>
+    <button class="primary" id="btnStart">Start match</button>
+  </div>
+
+  <!-- GAME -->
+  <div id="game" class="hide">
+    <div class="row">
+      <div>
+        <div class="banner" id="status">—</div>
+        <div style="height:10px"></div>
+        <div id="board"></div>
+        <div style="height:10px"></div>
+        <div class="modes">
+          <button id="modeClaim" class="on">Claim</button>
+          <button id="modeFeed">Feed</button>
+        </div>
+        <div class="rules" id="hint">Pick a cell to claim.</div>
+      </div>
+      <div class="side">
+        <div class="card" style="padding:12px">
+          <div style="font-size:12px;color:var(--dim);margin-bottom:8px">Round <b id="rNum">1</b> / <span id="rMax">20</span></div>
+          <div id="players"></div>
+        </div>
+        <div class="card" style="padding:12px">
+          <div style="font-size:12px;color:var(--dim);margin-bottom:6px">Match log</div>
+          <div id="log"></div>
+        </div>
+        <div class="card" style="padding:12px">
+          <div style="font-size:12px;color:var(--dim);margin-bottom:6px">Agent API</div>
+          <div class="rules">
+            <code>GET /api/match/CODE</code> state<br>
+            <code>POST /api/match/CODE/action</code><br>
+            <code>{"playerId","action":"claim|feed","x","y"}</code><br>
+            <code>GET /api/match/CODE/replay</code> full log
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- END -->
+  <div id="end" class="card hide" style="margin-top:16px">
+    <div id="endBanner" class="banner"></div>
+    <div style="height:12px"></div>
+    <div id="endScores"></div>
+    <div style="height:12px"></div>
+    <button class="primary" id="btnAgain">New match</button>
+  </div>
+</div>
+
+<script>
+(function(){
+'use strict';
+var S = { code:null, playerId:null, state:null, mode:'claim', ws:null, log:[] };
+var $ = function(id){ return document.getElementById(id); };
+
+function esc(s){ return String(s).replace(/[&<>"']/g, function(c){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+
+function api(method, path, body){
+  return fetch(path, {
+    method: method,
+    headers: {'Content-Type':'application/json'},
+    body: body ? JSON.stringify(body) : undefined
+  }).then(function(r){ return r.json(); });
+}
+
+// ---------- lobby ----------
+function showPane(which){
+  ['paneCreate','paneJoin','paneBot'].forEach(function(id){ $(id).classList.add('hide'); });
+  $(which).classList.remove('hide');
+  ['mCreate','mJoin','mBot'].forEach(function(id){ $(id).classList.remove('on'); });
+  $({paneCreate:'mCreate',paneJoin:'mJoin',paneBot:'mBot'}[which]).classList.add('on');
+}
+$('mCreate').onclick = function(){ showPane('paneCreate'); };
+$('mJoin').onclick = function(){ showPane('paneJoin'); };
+$('mBot').onclick = function(){ showPane('paneBot'); };
+
+$('btnCreate').onclick = function(){
+  var name = $('nameCreate').value.trim() || 'Player';
+  api('POST','/api/match',{name:name}).then(function(d){
+    if(d.error) return alert(d.error);
+    S.code = d.code; S.playerId = d.playerId;
+    enterWaiting();
+  });
+};
+$('btnJoin').onclick = function(){
+  var code = $('codeJoin').value.trim().toUpperCase();
+  var name = $('nameJoin').value.trim() || 'Player';
+  if(code.length !== 4) return alert('Code must be 4 characters');
+  api('POST','/api/match/'+code+'/join',{name:name}).then(function(d){
+    if(d.error) return alert(d.error);
+    S.code = d.code; S.playerId = d.playerId;
+    enterWaiting();
+  });
+};
+$('btnBot').onclick = function(){
+  api('POST','/api/match',{name:'Crab 1'}).then(function(d){
+    if(d.error) return alert(d.error);
+    S.code = d.code; S.playerId = d.playerId;
+    api('POST','/api/match/'+S.code+'/join',{name:'Crab 2',asBot:true}).then(function(){
+      return api('POST','/api/match/'+S.code+'/join',{name:'Crab 3',asBot:true});
+    }).then(function(){
+      return api('POST','/api/match/'+S.code+'/start',{});
+    }).then(function(){ enterGame(); });
+  });
+};
+
+// ---------- waiting ----------
+function enterWaiting(){
+  $('lobby').classList.add('hide');
+  $('waiting').classList.remove('hide');
+  $('wCode').textContent = S.code;
+  refreshWaiting();
+}
+function refreshWaiting(){
+  api('GET','/api/match/'+S.code).then(function(st){
+    S.state = st;
+    $('wPlayers').innerHTML = st.players.map(function(p){
+      return '<div class="pl'+(p.id===S.playerId?' you':'')+'">'+
+        '<span class="sw" style="background:'+p.color+'"></span>'+
+        '<span class="nm">'+esc(p.name)+(p.isBot?' (bot)':'')+'</span></div>';
+    }).join('');
+    if(st.status !== 'lobby') enterGame();
+  });
+}
+$('btnStart').onclick = function(){
+  api('POST','/api/match/'+S.code+'/start',{}).then(function(){
+    enterGame();
+  });
+};
+
+// ---------- game ----------
+function enterGame(){
+  $('waiting').classList.add('hide');
+  $('game').classList.remove('hide');
+  connectWs();
+  refresh();
+}
+
+function connectWs(){
+  if(S.ws) { try{S.ws.close();}catch(e){} }
+  var proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+  var ws = new WebSocket(proto + location.host + '/ws/' + S.code);
+  S.ws = ws;
+  ws.onmessage = function(ev){
+    var msg;
+    try { msg = JSON.parse(ev.data); } catch(e){ return; }
+    if(msg.state) { S.state = msg.state; render(); }
+    if(msg.type === 'round' && msg.result) { logRound(msg.result); }
+    if(msg.type === 'end') { showEnd(); }
+  };
+  ws.onclose = function(){ setTimeout(function(){ if(S.code) connectWs(); }, 1500); };
+}
+
+function logRound(r){
+  var lines = [];
+  (r.events||[]).forEach(function(e){
+    var who = nameOf(e.player);
+    if(e.type==='claim') lines.push('R'+r.round+' '+who+' claimed ('+e.x+','+e.y+') = '+e.value);
+    else if(e.type==='claim_fail') lines.push('R'+r.round+' '+who+' claim ('+e.x+','+e.y+') failed: '+e.reason);
+    else if(e.type==='feed') lines.push('R'+r.round+' '+who+' fed ('+e.x+','+e.y+') -> '+e.value);
+    else if(e.type==='feed_fail') lines.push('R'+r.round+' '+who+' feed ('+e.x+','+e.y+') failed: '+e.reason);
+    else if(e.type==='wash') lines.push('R'+r.round+' wash drifted '+(e.cells||[]).length+' cell(s)');
+  });
+  S.log = lines.concat(S.log).slice(0,200);
+  $('log').textContent = S.log.join('\n');
+}
+
+function nameOf(pid){
+  if(!S.state) return pid;
+  var p = S.state.players.filter(function(x){return x.id===pid;})[0];
+  return p ? p.name : pid;
+}
+
+function refresh(){
+  api('GET','/api/match/'+S.code).then(function(st){ S.state = st; render(); });
+}
+
+function render(){
+  var st = S.state;
+  if(!st) return;
+  $('rNum').textContent = st.round;
+  $('rMax').textContent = st.maxRounds;
+
+  var me = st.players.filter(function(p){return p.id===S.playerId;})[0];
+  var myPending = !!st.yourPending;
+
+  $('players').innerHTML = st.players.map(function(p){
+    return '<div class="pl'+(p.id===S.playerId?' you':'')+'">'+
+      '<span class="sw" style="background:'+p.color+'"></span>'+
+      '<span class="nm">'+esc(p.name)+(p.isBot?' (bot)':'')+'</span>'+
+      (p.submitted?'<span class="ck">✓</span>':'')+
+      '<span class="sc">'+p.score+'</span></div>';
+  }).join('');
+
+  var board = $('board');
+  board.innerHTML = '';
+  st.board.forEach(function(c, i){
+    var d = document.createElement('div');
+    d.className = 'cell' + (c.owner===S.playerId ? ' mine' : '');
+    if(c.owner) d.style.color = colorOf(c.owner);
+    var nut = c.nutrient===null ? '?' : c.nutrient;
+    var sc = c.score===null ? '' : c.score;
+    d.innerHTML = '<span class="dot">'+nut+'</span><span class="s">'+sc+'</span>';
+    d.title = '('+c.x+','+c.y+') nutrient '+nut + (c.owner ? ' · owned' : '');
+    d.onclick = function(){ pick(c); };
+    board.appendChild(d);
+  });
+
+  var status = $('status');
+  if(st.status === 'done'){
+    status.textContent = 'Match over';
+  } else if(myPending){
+    status.textContent = 'Submitted — waiting for others…';
+  } else {
+    status.textContent = 'Round ' + st.round + ' — your move';
+  }
+  $('hint').textContent = S.mode === 'claim'
+    ? 'Click a free cell to claim it.'
+    : 'Click one of your cells to feed it (+1, cap 5).';
+  $('modeClaim').classList.toggle('on', S.mode==='claim');
+  $('modeFeed').classList.toggle('on', S.mode==='feed');
+}
+
+function colorOf(pid){
+  if(!S.state) return '#888';
+  var p = S.state.players.filter(function(x){return x.id===pid;})[0];
+  return p ? p.color : '#888';
+}
+
+function pick(c){
+  if(!S.state || S.state.status !== 'playing') return;
+  if(S.state.yourPending) return;
+  if(S.mode === 'claim' && c.owner !== null) return;
+  if(S.mode === 'feed' && c.owner !== S.playerId) return;
+  api('POST','/api/match/'+S.code+'/action',{
+    playerId: S.playerId, action: S.mode, x: c.x, y: c.y
+  }).then(function(r){
+    if(r.error) alert(r.error);
+    refresh();
+  });
+}
+
+$('modeClaim').onclick = function(){ S.mode='claim'; render(); };
+$('modeFeed').onclick = function(){ S.mode='feed'; render(); };
+
+// ---------- end ----------
+function showEnd(){
+  var st = S.state;
+  if(!st || !st.finalScores) return;
+  $('game').classList.add('hide');
+  $('end').classList.remove('hide');
+  var won = st.winner === S.playerId;
+  var draw = st.winner === null;
+  var b = $('endBanner');
+  b.className = 'banner ' + (won ? 'win' : (draw ? '' : 'lose'));
+  b.textContent = won ? 'You win!' : (draw ? 'Draw.' : 'You lose.');
+  $('endScores').innerHTML = st.finalScores.map(function(p){
+    return '<div class="pl'+(p.id===S.playerId?' you':'')+'">'+
+      '<span class="sw" style="background:'+colorOf(p.id)+'"></span>'+
+      '<span class="nm">'+esc(p.name)+'</span>'+
+      '<span class="sc">'+p.score+' pts · '+p.cells+' cells</span></div>';
+  }).join('');
+}
+$('btnAgain').onclick = function(){ location.reload(); };
+
+})();
+</script>
+</body>
+</html>

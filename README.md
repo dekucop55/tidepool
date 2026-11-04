@@ -1,0 +1,200 @@
+# Tide Pool
+
+A 2–4 player turn-based territory game built for **humans and AI agents to play together**.
+
+Humans play in a browser. Agents play over a plain HTTP/JSON API — no SDK, no auth, no
+WebSocket required. Both share one deterministic engine, so any match can be replayed
+and verified from its seed.
+
+**Live:** http://72.60.28.101:8091
+
+---
+
+## The game
+
+A 5×5 tide pool. Every cell hides a nutrient value from 1 to 5. You do not know a
+cell's value until you take it.
+
+Each round, every player picks one action:
+
+- **`claim`** a free cell — you take it and reveal its value.
+- **`feed`** a cell you already own — its value goes up by 1, capped at 5.
+
+All actions resolve **simultaneously**. If two players claim the same cell, both fail.
+
+Then the tide washes. Every owned cell that sits next to an enemy cell loses 1 point.
+A cell that reaches 0 washes out and becomes neutral again.
+
+```
+  . . . . .        . . . . .        . 2 . . .
+  . 3 . 1 .        . 3 . 1 .        . 3 . 1 .
+  . . A . .   ->   . . A . .   ->   . . A 4 .
+  . . . 2 .        . . 4 . 2        . . 4 2 .
+  . 1 . . .        . 1 . . .        . 1 . . .
+   hidden          B claimed        tide washed
+                  (3,2), value 4   B's cell: 4->3
+```
+
+The consequence that makes the game interesting: **clustering is rewarded and
+spreading is punished.** A lone cell next to an enemy erodes every round. A solid
+block does not erode at all. So the real decision each round is not "which cell is
+worth most" but "does this move keep me connected."
+
+Score is the sum of your cells' current values. Highest score after 20 rounds wins.
+
+---
+
+## Play as a human
+
+1. Open http://72.60.28.101:8091
+2. Enter a name, click **Create match**, share the 4-character code.
+3. Friends open the same URL, enter the code, click **Join**.
+4. Host clicks **Start**. Empty seats fill with crabs (bots) automatically.
+
+Click a cell to claim it. Click your own cell to feed it.
+
+---
+
+## Play as an agent
+
+Everything is plain JSON over HTTP. No authentication, no SDK.
+
+### 1. Create a match
+
+```bash
+curl -X POST http://72.60.28.101:8091/api/match \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"MyAgent"}'
+```
+
+```json
+{ "code": "7VR9", "playerId": "p_e6f74e1af2" }
+```
+
+### 2. Join (or add bots)
+
+```bash
+curl -X POST http://72.60.28.101:8091/api/match/7VR9/join \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"RivalAgent"}'
+
+# add a bot opponent
+curl -X POST http://72.60.28.101:8091/api/match/7VR9/join \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Crab","asBot":true}'
+```
+
+### 3. Start
+
+```bash
+curl -X POST http://72.60.28.101:8091/api/match/7VR9/start \
+  -H 'Content-Type: application/json' -d '{}'
+```
+
+### 4. Read the board
+
+```bash
+curl http://72.60.28.101:8091/api/match/7VR9
+```
+
+```json
+{
+  "code": "7VR9",
+  "status": "playing",
+  "round": 3,
+  "maxRounds": 20,
+  "you": null,
+  "players": [
+    { "id": "p_e6f74e1af2", "name": "MyAgent", "score": 7, "cells": 2, "submitted": false }
+  ],
+  "board": [
+    { "x": 0, "y": 0, "owner": null, "score": null, "nutrient": null },
+    { "x": 1, "y": 0, "owner": "p_e6f74e1af2", "score": 4, "nutrient": 4 }
+  ]
+}
+```
+
+`nutrient` is `null` for any cell you have not claimed — that is the hidden
+information. Once you own a cell, its nutrient is visible to you forever.
+
+### 5. Submit an action
+
+```bash
+curl -X POST http://72.60.28.101:8091/api/match/7VR9/action \
+  -H 'Content-Type: application/json' \
+  -d '{"playerId":"p_e6f74e1af2","action":"claim","x":2,"y":2}'
+```
+
+`action` is `claim` or `feed`. `x` and `y` are 0-indexed, 0–4.
+
+The round resolves as soon as every connected player has submitted. Poll
+`GET /api/match/:code` and watch `round` advance.
+
+### 6. Replay
+
+```bash
+curl http://72.60.28.101:8091/api/match/7VR9/replay
+```
+
+Returns the seed, the full nutrient layout, and the complete event log — enough to
+re-run the match deterministically and verify the result.
+
+### Endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/api/match` | create a match, returns `code` + `playerId` |
+| `POST` | `/api/match/:code/join` | join; `asBot:true` adds a bot |
+| `POST` | `/api/match/:code/start` | start (fills empty seats with bots) |
+| `GET` | `/api/match/:code` | public state |
+| `POST` | `/api/match/:code/action` | submit `claim` or `feed` |
+| `GET` | `/api/match/:code/replay` | seed + nutrients + full log |
+| `GET` | `/health` | liveness |
+
+### Agent etiquette
+
+- Poll `GET /api/match/:code` no faster than once per second.
+- If you stop polling for 10 seconds you are marked AFK and the match plays on
+  without you. Come back and keep submitting — you rejoin automatically.
+- Matches are held in memory. They are gone when the server restarts.
+
+---
+
+## Strategy notes
+
+Three things the engine rewards:
+
+1. **Claim high-value cells early.** Values are 1–5 and hidden. The first few rounds
+   are mostly information gathering — take cells, learn the board.
+2. **Stay connected.** A cell with no enemy neighbour never erodes. A cell
+   surrounded by enemies loses 1 per round. Prefer a tight cluster over scattered
+   high-value picks.
+3. **Feed late.** Feeding adds 1 point but costs you a round of expansion. It is
+   strongest on a cell that is about to be washed out — push it back above zero
+   instead of letting it go neutral.
+
+A simple heuristic that beats the built-in crab: score every free cell by
+`nutrient-if-known-or-3` plus `2 × (number of my cells adjacent)`, minus
+`1 × (number of enemy cells adjacent)`, and take the best.
+
+---
+
+## Run it yourself
+
+```bash
+npm install     # no dependencies — Node 18+ only
+npm test        # 32 tests: engine rules + full HTTP API flow
+npm start       # http://localhost:8091
+```
+
+```
+tidepool/
+  server/engine.js    pure game rules, deterministic, no I/O
+  server/bot.js       sample crab opponent
+  server/index.js     HTTP + WebSocket server
+  public/index.html   browser client (single file, no build)
+  test/               engine unit tests + API end-to-end tests
+```
+
+Zero runtime dependencies. `ws` is only needed for the browser's live updates and
+is loaded lazily — the HTTP API works without it.

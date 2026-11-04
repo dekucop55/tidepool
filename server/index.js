@@ -1,0 +1,310 @@
+'use strict';
+// Tide Pool HTTP + WebSocket server.
+// Humans: browser at /. Agents: HTTP/JSON API documented in README.
+
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const { URL } = require('url');
+
+const engine = require('./engine');
+const bot = require('./bot');
+
+const PORT = process.env.PORT || 8091;
+const PUBLIC = path.join(__dirname, '..', 'public');
+
+const matches = new Map(); // code -> match
+const sockets = new Map(); // code -> Set<ws>
+
+// --- tiny WebSocket implementation (RFC 6455, no deps) ---
+const WS_MAGIC = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
+
+function wsAccept(key) {
+  return crypto.createHash('sha1').update(key + WS_MAGIC).digest('base64');
+}
+
+function wsEncode(str) {
+  const payload = Buffer.from(str);
+  const len = payload.length;
+  let header;
+  if (len < 126) {
+    header = Buffer.from([0x81, len]);
+  } else if (len < 65536) {
+    header = Buffer.alloc(4);
+    header[0] = 0x81; header[1] = 126;
+    header.writeUInt16BE(len, 2);
+  } else {
+    header = Buffer.alloc(10);
+    header[0] = 0x81; header[1] = 127;
+    header.writeBigUInt64BE(BigInt(len), 2);
+  }
+  return Buffer.concat([header, payload]);
+}
+
+function wsDecode(buf) {
+  if (buf.length < 2) return null;
+  const opcode = buf[0] & 0x0f;
+  if (opcode === 0x8) return { type: 'close' };
+  let len = buf[1] & 0x7f;
+  let offset = 2;
+  if (len === 126) { len = buf.readUInt16BE(2); offset = 4; }
+  else if (len === 127) { len = Number(buf.readBigUInt64BE(2)); offset = 10; }
+  const data = buf.slice(offset, offset + len).toString('utf8');
+  return { type: 'text', data };
+}
+
+function broadcast(code, obj) {
+  const set = sockets.get(code);
+  if (!set) return;
+  const msg = wsEncode(JSON.stringify(obj));
+  for (const ws of set) {
+    try { ws.write(msg); } catch (_) {}
+  }
+}
+
+// --- helpers ---
+function json(res, code, obj) {
+  const body = JSON.stringify(obj);
+  res.writeHead(code, {
+    'Content-Type': 'application/json',
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type'
+  });
+  res.end(body);
+}
+
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    let data = '';
+    req.on('data', c => {
+      data += c;
+      if (data.length > 1e6) { reject(new Error('body too large')); req.destroy(); }
+    });
+    req.on('end', () => {
+      if (!data) return resolve({});
+      try { resolve(JSON.parse(data)); } catch (e) { reject(new Error('invalid JSON')); }
+    });
+    req.on('error', reject);
+  });
+}
+
+function newCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let c;
+  do {
+    c = '';
+    for (let i = 0; i < 4; i++) c += chars[Math.floor(Math.random() * chars.length)];
+  } while (matches.has(c));
+  return c;
+}
+
+function fillBots(m) {
+  // Fill empty seats with bots after a short delay so humans can join first.
+  const need = Math.max(0, 2 - m.players.filter(p => !p.isBot).length);
+  for (let i = 0; i < need; i++) {
+    if (m.players.length >= 4) break;
+    const id = 'bot_' + crypto.randomBytes(4).toString('hex');
+    engine.addPlayer(m, { id, name: 'Crab ' + (m.players.length + 1), isBot: true });
+  }
+}
+
+// A human who created or joined over plain HTTP has no WebSocket, so nothing
+// ever marks them away. If they have not acted within AFK_MS of a round
+// starting, treat them as disconnected so the match can play itself out.
+const AFK_MS = 10000;
+function scheduleAfkCheck(m) {
+  if (m._afkTimer) clearTimeout(m._afkTimer);
+  m._afkTimer = setTimeout(() => {
+    if (m.status !== 'playing') return;
+    let changed = false;
+    for (const p of m.players) {
+      if (!p.isBot && p.connected && !m.pending[p.id]) {
+        p.connected = false;
+        changed = true;
+        console.log('player ' + p.id + ' marked AFK in ' + m.code);
+      }
+    }
+    if (changed) {
+      broadcast(m.code, { type: 'pending', state: engine.publicState(m) });
+      maybeRunBots(m);
+    }
+  }, AFK_MS);
+}
+
+function maybeRunBots(m) {
+  if (m.status !== 'playing') return;
+  const active = m.players.filter(p => p.connected);
+  const humans = active.filter(p => !p.isBot);
+  const humansPending = humans.filter(p => m.pending[p.id]).length;
+  // Bots act once every ACTIVE human has acted, or when there are no active
+  // humans at all (a bot-only or abandoned match must still play itself out).
+  if (humans.length > 0 && humansPending < humans.length) return;
+  for (const p of m.players) {
+    if (!p.isBot) continue;
+    if (m.pending[p.id]) continue;
+    const state = engine.publicState(m, p.id);
+    let act;
+    try {
+      act = bot.chooseAction(state, p.id);
+    } catch (e) {
+      console.error('bot ' + p.id + ' threw: ' + (e && e.message));
+      act = { action: 'claim', x: 0, y: 0 };
+    }
+    engine.submitAction(m, p.id, act);
+  }
+  if (engine.allSubmitted(m)) {
+    const result = engine.resolveRound(m);
+    broadcast(m.code, { type: 'round', result, state: engine.publicState(m) });
+    if (m.status === 'done') {
+      broadcast(m.code, { type: 'end', state: engine.publicState(m) });
+      if (m._tick) { clearInterval(m._tick); m._tick = null; }
+    } else {
+      scheduleAfkCheck(m);
+    }
+  }
+}
+
+// Single watchdog per match: keeps bots moving and resolves any round that
+// somehow stalled (a bot that never acted, a timer that never fired).
+function startTicker(m) {
+  if (m._tick) clearInterval(m._tick);
+  m._tick = setInterval(() => {
+    if (m.status !== 'playing') { clearInterval(m._tick); m._tick = null; return; }
+    maybeRunBots(m);
+  }, 600);
+}
+
+// --- routes ---
+const server = http.createServer(async (req, res) => {
+  const u = new URL(req.url, 'http://x');
+  const p = u.pathname;
+
+  if (req.method === 'OPTIONS') return json(res, 204, {});
+
+  // static
+  if (req.method === 'GET' && (p === '/' || p === '/index.html')) {
+    return fs.readFile(path.join(PUBLIC, 'index.html'), (e, d) => {
+      if (e) return json(res, 500, { error: 'no index' });
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(d);
+    });
+  }
+  if (req.method === 'GET' && p === '/health') return json(res, 200, { ok: true, matches: matches.size });
+
+  // POST /api/match  {name} -> {code, playerId}
+  if (req.method === 'POST' && p === '/api/match') {
+    const body = await readBody(req).catch(() => ({}));
+    const code = newCode();
+    const m = engine.createMatch({ code });
+    const pid = 'p_' + crypto.randomBytes(5).toString('hex');
+    engine.addPlayer(m, { id: pid, name: (body.name || 'Player').slice(0, 24) });
+    matches.set(code, m);
+    return json(res, 200, { code, playerId: pid });
+  }
+
+  // POST /api/match/:code/join  {name, asBot?} -> {playerId}
+  let mm = p.match(/^\/api\/match\/([A-Z2-9]{4})\/join$/);
+  if (req.method === 'POST' && mm) {
+    const m = matches.get(mm[1]);
+    if (!m) return json(res, 404, { error: 'match not found' });
+    if (m.status !== 'lobby') return json(res, 409, { error: 'match already started' });
+    const body = await readBody(req).catch(() => ({}));
+    const pid = (body.asBot ? 'bot_' : 'p_') + crypto.randomBytes(5).toString('hex');
+    try {
+      engine.addPlayer(m, { id: pid, name: (body.name || 'Player').slice(0, 24), isBot: !!body.asBot });
+    } catch (e) { return json(res, 409, { error: e.message }); }
+    broadcast(m.code, { type: 'lobby', state: engine.publicState(m) });
+    return json(res, 200, { code: m.code, playerId: pid });
+  }
+
+  // POST /api/match/:code/start -> fills bots, starts
+  mm = p.match(/^\/api\/match\/([A-Z2-9]{4})\/start$/);
+  if (req.method === 'POST' && mm) {
+    const m = matches.get(mm[1]);
+    if (!m) return json(res, 404, { error: 'match not found' });
+    if (m.status !== 'lobby') return json(res, 409, { error: 'already started' });
+    fillBots(m);
+    engine.startMatch(m);
+    broadcast(m.code, { type: 'start', state: engine.publicState(m) });
+    scheduleAfkCheck(m);
+    startTicker(m);
+    return json(res, 200, { ok: true, state: engine.publicState(m) });
+  }
+
+  // GET /api/match/:code -> public state
+  mm = p.match(/^\/api\/match\/([A-Z2-9]{4})$/);
+  if (req.method === 'GET' && mm) {
+    const m = matches.get(mm[1]);
+    if (!m) return json(res, 404, { error: 'match not found' });
+    return json(res, 200, engine.publicState(m));
+  }
+
+  // POST /api/match/:code/action  {playerId, action, x, y}
+  mm = p.match(/^\/api\/match\/([A-Z2-9]{4})\/action$/);
+  if (req.method === 'POST' && mm) {
+    const m = matches.get(mm[1]);
+    if (!m) return json(res, 404, { error: 'match not found' });
+    const body = await readBody(req).catch(() => ({}));
+    const r = engine.submitAction(m, body.playerId, body);
+    if (!r.ok) return json(res, 400, r);
+    broadcast(m.code, { type: 'pending', state: engine.publicState(m) });
+    maybeRunBots(m);
+    return json(res, 200, { ok: true, waiting: r.waiting });
+  }
+
+  // GET /api/match/:code/replay -> full log
+  mm = p.match(/^\/api\/match\/([A-Z2-9]{4})\/replay$/);
+  if (req.method === 'GET' && mm) {
+    const m = matches.get(mm[1]);
+    if (!m) return json(res, 404, { error: 'match not found' });
+    return json(res, 200, engine.replay(m));
+  }
+
+  json(res, 404, { error: 'not found' });
+});
+
+server.on('upgrade', (req, socket) => {
+  const u = new URL(req.url, 'http://x');
+  const mm = u.pathname.match(/^\/ws\/([A-Z2-9]{4})$/);
+  if (!mm) { socket.destroy(); return; }
+  const code = mm[1];
+  const key = req.headers['sec-websocket-key'];
+  const accept = wsAccept(key);
+  socket.write(
+    'HTTP/1.1 101 Switching Protocols\r\n' +
+    'Upgrade: websocket\r\n' +
+    'Connection: Upgrade\r\n' +
+    'Sec-WebSocket-Accept: ' + accept + '\r\n\r\n'
+  );
+  if (!sockets.has(code)) sockets.set(code, new Set());
+  sockets.get(code).add(socket);
+  socket.on('data', buf => {
+    const msg = wsDecode(buf);
+    if (msg && msg.type === 'close') { socket.destroy(); }
+  });
+  socket.on('close', () => {
+    const set = sockets.get(code);
+    if (set) set.delete(socket);
+    // Mark this match's human players disconnected if no sockets remain, so a
+    // bot-only or abandoned match still plays itself out.
+    const m = matches.get(code);
+    if (m && set && set.size === 0) {
+      for (const p of m.players) {
+        if (!p.isBot && p.connected) {
+          p.connected = false;
+          console.log('player ' + p.id + ' disconnected from ' + code);
+        }
+      }
+      setTimeout(() => maybeRunBots(m), 300);
+    }
+  });
+  socket.on('error', () => {});
+});
+
+server.listen(PORT, () => {
+  console.log('Tide Pool listening on http://localhost:' + PORT);
+});
+
+module.exports = server;
