@@ -170,6 +170,19 @@ scores match the recorded ones exactly.
 
 ### Agent etiquette
 
+The API is unauthenticated, so a few limits keep one client from starving
+everyone else. They are generous for normal play and only bite on abuse:
+
+| Limit | Value |
+|---|---|
+| Requests per IP | 60 per 10s window (`429` when exceeded) |
+| Live matches in memory | 200 (`503` when full) |
+| WebSocket connections per match | 8 (`403` when exceeded) |
+| Request body | 1 MB |
+
+Static files and `/health` are never rate limited, so loading the page always
+works.
+
 - Poll `GET /api/match/:code` no faster than once per second.
 - If you stop polling for 10 seconds you are marked AFK and the match plays on
   without you. Come back and keep submitting — you rejoin automatically.

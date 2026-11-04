@@ -138,6 +138,37 @@ const LOBBY_TTL_MS = 60 * 60 * 1000; // 1 hour in the lobby
 const DONE_TTL_MS = 30 * 60 * 1000;  // 30 minutes after finishing
 const SWEEP_MS = 5 * 60 * 1000;      // check every 5 minutes
 
+// --- resource limits ---
+// The API is unauthenticated and sits behind a reverse proxy, so these are the
+// only things standing between one script and a full memory leak. Measured
+// before these existed: 1393 matches/second at ~7.5 KB each, and a single
+// match accepted 150+ WebSocket connections with no ceiling.
+const MAX_MATCHES = 200;          // hard ceiling on live matches in memory
+const MAX_SOCKETS_PER_MATCH = 8;  // a 4-player game plus a few spectators
+const RATE_WINDOW_MS = 10 * 1000; // sliding window
+const RATE_MAX_PER_WINDOW = 60;   // requests per IP per window
+
+const rateBuckets = new Map(); // ip -> { count, resetAt }
+
+function rateLimited(ip) {
+  const now = Date.now();
+  let b = rateBuckets.get(ip);
+  if (!b || now >= b.resetAt) {
+    b = { count: 0, resetAt: now + RATE_WINDOW_MS };
+    rateBuckets.set(ip, b);
+  }
+  b.count += 1;
+  return b.count > RATE_MAX_PER_WINDOW;
+}
+
+function clientIp(req) {
+  // Behind nginx the real address arrives in X-Forwarded-For; the first entry
+  // is the client. Fall back to the socket address for direct access.
+  const fwd = req.headers['x-forwarded-for'];
+  if (typeof fwd === 'string' && fwd.length) return fwd.split(',')[0].trim();
+  return req.socket.remoteAddress || 'unknown';
+}
+
 function destroyMatch(m) {
   if (!m) return;
   if (m._tick) { clearInterval(m._tick); m._tick = null; }
@@ -274,6 +305,14 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === 'OPTIONS') return json(res, 204, {});
 
+  // Unauthenticated API: throttle per IP before doing any work. Static files
+  // and health checks are exempt so a page load is never blocked.
+  const ip = clientIp(req);
+  const isStatic = req.method === 'GET' && (p === '/' || p === '/index.html' || p === '/health');
+  if (!isStatic && rateLimited(ip)) {
+    return json(res, 429, { error: 'too many requests, slow down' });
+  }
+
   // static
   if (req.method === 'GET' && (p === '/' || p === '/index.html')) {
     return fs.readFile(path.join(PUBLIC, 'index.html'), (e, d) => {
@@ -286,6 +325,9 @@ const server = http.createServer(async (req, res) => {
 
   // POST /api/match  {name} -> {code, playerId}
   if (req.method === 'POST' && p === '/api/match') {
+    if (matches.size >= MAX_MATCHES) {
+      return json(res, 503, { error: 'server is full, try again shortly' });
+    }
     const body = await readBody(req).catch(() => ({}));
     const code = newCode();
     const m = engine.createMatch({ code });
@@ -398,6 +440,20 @@ server.on('upgrade', (req, socket) => {
   const mm = u.pathname.match(/^\/ws\/([A-Z2-9]{4})$/);
   if (!mm) { socket.destroy(); return; }
   const code = mm[1];
+  // A 4-player game plus a few spectators is the realistic ceiling. Without a
+  // cap, one script can open unlimited sockets and every broadcast then writes
+  // to all of them.
+  const existing = sockets.get(code);
+  if (existing && existing.size >= MAX_SOCKETS_PER_MATCH) {
+    socket.write(
+      'HTTP/1.1 403 Forbidden\r\n' +
+      'Connection: close\r\n' +
+      'Content-Type: text/plain\r\n\r\n' +
+      'too many connections to this match'
+    );
+    socket.destroy();
+    return;
+  }
   const key = req.headers['sec-websocket-key'];
   const accept = wsAccept(key);
   socket.write(

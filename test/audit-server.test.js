@@ -263,6 +263,49 @@ async function main() {
     assert.strictEqual(vAnon.status, 403);
   });
 
+  await test('resource limits: rate limit, match ceiling, socket ceiling', async () => {
+    // Rate limit: hammer one endpoint from one IP and expect 429s.
+    let limited = 0;
+    for (let i = 0; i < 80; i++) {
+      const r = await req('GET', '/api/match/ZZZZ');
+      if (r.status === 429) limited++;
+    }
+    assert.ok(limited > 0, 'a burst of requests from one IP must be throttled');
+
+    // Socket ceiling: open more WebSockets than a match allows.
+    const created = await req('POST', '/api/match', { name: 'Caps' });
+    const code = created.body.code;
+    let accepted = 0, refused = 0;
+    const socks = [];
+    for (let i = 0; i < 14; i++) {
+      try {
+        const key = crypto.randomBytes(16).toString('base64');
+        const sk = await new Promise((resolve, reject) => {
+          const s2 = net.connect(PORT, '127.0.0.1', () => {
+            s2.write('GET /ws/' + code + ' HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\n' +
+              'Connection: Upgrade\r\nSec-WebSocket-Key: ' + key + '\r\n' +
+              'Sec-WebSocket-Version: 13\r\n\r\n');
+          });
+          let buf = Buffer.alloc(0);
+          s2.on('data', d => {
+            buf = Buffer.concat([buf, d]);
+            if (buf.includes('\r\n\r\n')) {
+              const head = buf.slice(0, buf.indexOf('\r\n\r\n')).toString();
+              if (/101/.test(head)) { accepted++; resolve(s2); }
+              else { refused++; reject(new Error('refused')); }
+            }
+          });
+          s2.on('error', () => { refused++; reject(new Error('err')); });
+          setTimeout(() => { refused++; reject(new Error('timeout')); }, 2000);
+        });
+        socks.push(sk);
+      } catch (e) { /* counted as refused */ }
+    }
+    socks.forEach(s2 => { try { s2.destroy(); } catch (_) {} });
+    assert.ok(accepted <= 8, 'a match must not accept unlimited sockets (got ' + accepted + ')');
+    assert.ok(refused > 0, 'extra sockets must be refused');
+  });
+
   console.log('\n' + passed + ' passed, ' + failed + ' failed\n');
   server.close();
   process.exit(failed ? 1 : 0);
