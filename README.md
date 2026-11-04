@@ -182,19 +182,33 @@ A simple heuristic that beats the built-in crab: score every free cell by
 ## Run it yourself
 
 ```bash
-npm install     # no dependencies — Node 18+ only
-npm test        # 32 tests: engine rules + full HTTP API flow
+git clone https://github.com/dekucop55/tidepool.git && cd tidepool
+npm install     # nothing to install — no dependencies, Node 18+ only
+npm test        # 67 tests across 6 suites
 npm start       # http://localhost:8091
 ```
 
 ```
 tidepool/
-  server/engine.js    pure game rules, deterministic, no I/O
-  server/bot.js       sample crab opponent
-  server/index.js     HTTP + WebSocket server
-  public/index.html   browser client (single file, no build)
-  test/               engine unit tests + API end-to-end tests
+  server/engine.js     pure game rules, deterministic, no I/O
+  server/bot.js        sample crab opponent
+  server/index.js      HTTP + WebSocket server
+  public/index.html    browser client (single file, no build)
+  test/run-all.js      runs every suite in sequence
+  test/                engine, API, stress, audit, and client-path suites
 ```
 
 Zero runtime dependencies. `ws` is only needed for the browser's live updates and
 is loaded lazily — the HTTP API works without it.
+
+### Test suites
+
+| Suite | What it covers |
+|---|---|
+| `engine.test.js` | game rules: claims, feeds, wash, scoring, end conditions |
+| `audit.test.js` | regression tests for the audit fixes (info leak, order-independent wash) |
+| `path.test.js` | client URL handling behind a sub-path reverse proxy |
+| `api.test.js` | full HTTP API flow, including a bot match played to completion |
+| `stress.test.js` | stalled rounds, disconnects, malformed input, concurrency |
+| `audit-server.test.js` | match sweeping, WebSocket framing, timer cleanup |
+

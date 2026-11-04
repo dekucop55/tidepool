@@ -5,7 +5,12 @@
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",
-    "test": "node test/engine.test.js",
+    "test": "node test/run-all.js",
+    "test:engine": "node test/engine.test.js",
+    "test:api": "node test/api.test.js",
+    "test:stress": "node test/stress.test.js",
+    "test:audit": "node test/audit.test.js && node test/audit-server.test.js",
+    "test:path": "node test/path.test.js",
     "bot": "node server/bot.js"
   },
   "engines": { "node": ">=18" },
