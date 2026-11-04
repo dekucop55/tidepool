@@ -169,6 +169,61 @@ async function main() {
     assert.ok(typeof h.body.matches === 'number');
   });
 
+  await test('a match with no bots and no active players ends instead of spinning', async () => {
+    // Two humans, no bots, both go AFK. allSubmitted() is false for an empty
+    // active set, so without this guard the ticker spins forever and the
+    // match never resolves.
+    const c = await req('POST', '/api/match', { name: 'Ghost1' });
+    const code = c.body.code;
+    await req('POST', '/api/match/' + code + '/join', { name: 'Ghost2' });
+    await req('POST', '/api/match/' + code + '/start', {});
+    let st;
+    for (let i = 0; i < 40; i++) {
+      await sleep(500);
+      st = await req('GET', '/api/match/' + code);
+      if (st.body.status === 'done') break;
+    }
+    assert.strictEqual(st.body.status, 'done',
+      'an abandoned bot-less match must end, not spin forever');
+    assert.strictEqual(st.body.winner, null, 'nobody won, it should be a draw');
+  });
+
+  await test('a match with bots still plays out when the humans leave', async () => {
+    // The opposite case: bots must carry the match to completion on their own.
+    const c = await req('POST', '/api/match', { name: 'Ghost3' });
+    const code = c.body.code;
+    await req('POST', '/api/match/' + code + '/join', { name: 'B1', asBot: true });
+    await req('POST', '/api/match/' + code + '/join', { name: 'B2', asBot: true });
+    await req('POST', '/api/match/' + code + '/start', {});
+    let st;
+    for (let i = 0; i < 120; i++) {
+      await sleep(500);
+      st = await req('GET', '/api/match/' + code);
+      if (st.body.status === 'done') break;
+    }
+    assert.strictEqual(st.body.status, 'done', 'bot match must finish');
+    const total = st.body.finalScores.reduce((s, p) => s + p.score, 0);
+    assert.ok(total > 0, 'bots should have scored something');
+  });
+
+  await test('replay can be verified through the API', async () => {
+    const c = await req('POST', '/api/match', { name: 'H' });
+    const code = c.body.code;
+    await req('POST', '/api/match/' + code + '/join', { name: 'B', asBot: true });
+    await req('POST', '/api/match/' + code + '/start', {});
+    let st;
+    for (let i = 0; i < 120; i++) {
+      await sleep(500);
+      st = await req('GET', '/api/match/' + code);
+      if (st.body.status === 'done') break;
+    }
+    const v = await req('GET', '/api/match/' + code + '/verify');
+    assert.strictEqual(v.body.verified, true,
+      're-simulating the replay must reproduce the recorded scores');
+    assert.deepStrictEqual(v.body.recomputed, v.body.recorded);
+    assert.ok(v.body.rounds > 0);
+  });
+
   console.log('\n' + passed + ' passed, ' + failed + ' failed\n');
   server.close();
   process.exit(failed ? 1 : 0);

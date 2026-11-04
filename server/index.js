@@ -149,6 +149,23 @@ function destroyMatch(m) {
 function sweepMatches() {
   const now = Date.now();
   for (const m of matches.values()) {
+    // A match where every human has gone AFK and there are no bots can never
+    // resolve: allSubmitted() is false for an empty active set, so the ticker
+    // spins forever. End it instead of leaking the timer.
+    if (m.status === 'playing' && engine.activePlayers(m).length === 0) {
+      const bots = m.players.filter(p => p.isBot);
+      if (bots.length === 0) {
+        console.log('ending abandoned match ' + m.code + ' (no active players, no bots)');
+        m.status = 'done';
+        m._finishedAt = now;
+        m.finalScores = m.players.map(p => ({ id: p.id, name: p.name, score: p.score, cells: p.cells }));
+        m.winner = null;
+        m.log.push({ round: m.round, type: 'draw', players: m.players.map(p => p.id) });
+        broadcast(m.code, { type: 'end', state: engine.publicState(m) });
+        if (m._tick) { clearInterval(m._tick); m._tick = null; }
+        continue;
+      }
+    }
     if (m.status === 'done' && now - (m._finishedAt || now) > DONE_TTL_MS) {
       console.log('sweeping finished match ' + m.code);
       destroyMatch(m);
@@ -201,6 +218,19 @@ function maybeRunBots(m) {
   // Bots act once every ACTIVE human has acted, or when there are no active
   // humans at all (a bot-only or abandoned match must still play itself out).
   if (humans.length > 0 && humansPending < humans.length) return;
+  // Nobody is left to play and there are no bots: the round can never resolve,
+  // so end the match rather than spinning the ticker forever.
+  if (humans.length === 0 && m.players.every(p => !p.isBot)) {
+    console.log('ending match ' + m.code + ': no active players and no bots');
+    m.status = 'done';
+    m._finishedAt = Date.now();
+    m.finalScores = m.players.map(p => ({ id: p.id, name: p.name, score: p.score, cells: p.cells }));
+    m.winner = null;
+    m.log.push({ round: m.round, type: 'draw', players: m.players.map(p => p.id) });
+    broadcast(m.code, { type: 'end', state: engine.publicState(m) });
+    if (m._tick) { clearInterval(m._tick); m._tick = null; }
+    return;
+  }
   for (const p of m.players) {
     if (!p.isBot) continue;
     if (m.pending[p.id]) continue;
@@ -322,6 +352,24 @@ const server = http.createServer(async (req, res) => {
     const m = matches.get(mm[1]);
     if (!m) return json(res, 404, { error: 'match not found' });
     return json(res, 200, engine.replay(m));
+  }
+
+  // GET /api/match/:code/verify -> re-simulate the replay and compare
+  mm = p.match(/^\/api\/match\/([A-Z2-9]{4})\/verify$/);
+  if (req.method === 'GET' && mm) {
+    const m = matches.get(mm[1]);
+    if (!m) return json(res, 404, { error: 'match not found' });
+    const rep = engine.replay(m);
+    const recomputed = engine.verifyReplay(rep);
+    const recorded = (m.finalScores || []).map(s => ({ id: s.id, score: s.score, cells: s.cells }));
+    const match = JSON.stringify(recomputed) === JSON.stringify(recorded);
+    return json(res, 200, {
+      code: m.code,
+      verified: match,
+      recorded,
+      recomputed,
+      rounds: rep.log.filter(e => e.events !== undefined).length
+    });
   }
 
   json(res, 404, { error: 'not found' });

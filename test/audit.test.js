@@ -220,5 +220,36 @@ test('the bot produces a legal action for every board it sees', () => {
   }
 });
 
+test('a replay can be independently re-simulated to the same result', () => {
+  // The README claims any match can be replayed and verified from its seed.
+  // That is only true if the log records the raw actions, not just events.
+  const bot = require('../server/bot');
+  for (let seed = 1; seed <= 15; seed++) {
+    const m = engine.createMatch({ seed });
+    engine.addPlayer(m, { id: 'a', name: 'A' });
+    engine.addPlayer(m, { id: 'b', name: 'B' });
+    engine.addPlayer(m, { id: 'c', name: 'C' });
+    engine.startMatch(m);
+    while (m.status === 'playing' && m.round <= m.maxRounds + 1) {
+      for (const p of m.players) {
+        const st = engine.publicState(m, p.id);
+        engine.submitAction(m, p.id, bot.chooseAction(st, p.id));
+      }
+      engine.resolveRound(m);
+    }
+    const rep = engine.replay(m);
+    // every logged round must carry the actions that produced it
+    for (const entry of rep.log) {
+      if (entry.events === undefined) continue; // start/win/draw markers
+      assert.ok(Array.isArray(entry.actions),
+        'round ' + entry.round + ' is missing its actions');
+    }
+    const recomputed = engine.verifyReplay(rep);
+    const actual = m.finalScores.map(p => ({ id: p.id, score: p.score, cells: p.cells }));
+    assert.deepStrictEqual(recomputed, actual,
+      'seed ' + seed + ': re-simulating the replay gave a different result');
+  }
+});
+
 console.log('\n' + passed + ' passed, ' + failed + ' failed\n');
 process.exit(failed ? 1 : 0);
