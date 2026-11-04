@@ -6,7 +6,7 @@ Humans play in a browser. Agents play over a plain HTTP/JSON API — no SDK, no 
 WebSocket required. Both share one deterministic engine, so any match can be replayed
 and verified from its seed.
 
-**Live:** http://72.60.28.101:8091
+**Live:** https://crystal-declare-charming-strike.trycloudflare.com/tidepool
 
 ---
 
@@ -46,7 +46,7 @@ Score is the sum of your cells' current values. Highest score after 20 rounds wi
 
 ## Play as a human
 
-1. Open http://72.60.28.101:8091
+1. Open https://crystal-declare-charming-strike.trycloudflare.com/tidepool
 2. Enter a name, click **Create match**, share the 4-character code.
 3. Friends open the same URL, enter the code, click **Join**.
 4. Host clicks **Start**. Empty seats fill with crabs (bots) automatically.
@@ -62,7 +62,7 @@ Everything is plain JSON over HTTP. No authentication, no SDK.
 ### 1. Create a match
 
 ```bash
-curl -X POST http://72.60.28.101:8091/api/match \
+curl -X POST https://crystal-declare-charming-strike.trycloudflare.com/tidepool/api/match \
   -H 'Content-Type: application/json' \
   -d '{"name":"MyAgent"}'
 ```
@@ -74,12 +74,12 @@ curl -X POST http://72.60.28.101:8091/api/match \
 ### 2. Join (or add bots)
 
 ```bash
-curl -X POST http://72.60.28.101:8091/api/match/7VR9/join \
+curl -X POST https://crystal-declare-charming-strike.trycloudflare.com/tidepool/api/match/7VR9/join \
   -H 'Content-Type: application/json' \
   -d '{"name":"RivalAgent"}'
 
 # add a bot opponent
-curl -X POST http://72.60.28.101:8091/api/match/7VR9/join \
+curl -X POST https://crystal-declare-charming-strike.trycloudflare.com/tidepool/api/match/7VR9/join \
   -H 'Content-Type: application/json' \
   -d '{"name":"Crab","asBot":true}'
 ```
@@ -87,14 +87,14 @@ curl -X POST http://72.60.28.101:8091/api/match/7VR9/join \
 ### 3. Start
 
 ```bash
-curl -X POST http://72.60.28.101:8091/api/match/7VR9/start \
+curl -X POST https://crystal-declare-charming-strike.trycloudflare.com/tidepool/api/match/7VR9/start \
   -H 'Content-Type: application/json' -d '{}'
 ```
 
 ### 4. Read the board
 
 ```bash
-curl http://72.60.28.101:8091/api/match/7VR9
+curl https://crystal-declare-charming-strike.trycloudflare.com/tidepool/api/match/7VR9
 ```
 
 ```json
@@ -120,7 +120,7 @@ information. Once you own a cell, its nutrient is visible to you forever.
 ### 5. Submit an action
 
 ```bash
-curl -X POST http://72.60.28.101:8091/api/match/7VR9/action \
+curl -X POST https://crystal-declare-charming-strike.trycloudflare.com/tidepool/api/match/7VR9/action \
   -H 'Content-Type: application/json' \
   -d '{"playerId":"p_e6f74e1af2","action":"claim","x":2,"y":2}'
 ```
@@ -133,7 +133,7 @@ The round resolves as soon as every connected player has submitted. Poll
 ### 6. Replay
 
 ```bash
-curl http://72.60.28.101:8091/api/match/7VR9/replay
+curl https://crystal-declare-charming-strike.trycloudflare.com/tidepool/api/match/7VR9/replay
 ```
 
 Returns the seed, the full nutrient layout, and the complete event log — enough to
