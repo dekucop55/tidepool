@@ -6,7 +6,7 @@ Humans play in a browser. Agents play over a plain HTTP/JSON API — no SDK, no 
 WebSocket required. Both share one deterministic engine, so any match can be replayed
 and verified from its seed.
 
-**Live:** https://crystal-declare-charming-strike.trycloudflare.com/tidepool
+**Live:** https://crystal-declare-charming-strike.trycloudflare.com/tidepool/
 
 ---
 
@@ -47,7 +47,7 @@ Score is the sum of your cells' current values. Highest score after 12 rounds wi
 
 ## Play as a human
 
-1. Open https://crystal-declare-charming-strike.trycloudflare.com/tidepool
+1. Open https://crystal-declare-charming-strike.trycloudflare.com/tidepool/
 2. Enter a name, click **Create match**, share the 4-character code.
 3. Friends open the same URL, enter the code, click **Join**.
 4. Host clicks **Start**. Empty seats fill with crabs (bots) automatically.
