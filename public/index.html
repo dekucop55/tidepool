@@ -165,15 +165,48 @@ var $ = function(id){ return document.getElementById(id); };
 function esc(s){ return String(s).replace(/[&<>"']/g, function(c){
   return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
 
+// Errors are shown inline. alert() blocks the JS thread in some embedded
+// browsers and hides the failure entirely, which is how a broken API call
+// ends up looking like "nothing happened".
+function showError(msg){
+  var el = $('err');
+  if(!el){
+    el = document.createElement('div');
+    el.id = 'err';
+    el.className = 'banner';
+    el.style.cssText = 'margin-bottom:12px;background:rgba(239,83,80,.15);border-color:var(--bad);color:var(--bad)';
+    var host = $('lobby');
+    host.parentNode.insertBefore(el, host);
+  }
+  el.textContent = msg;
+  el.classList.remove('hide');
+}
+function clearError(){ var el = $('err'); if(el) el.classList.add('hide'); }
+
 function api(method, path, body){
-  return fetch(path, {
+  return fetch(apiPath(path), {
     method: method,
     headers: {'Content-Type':'application/json'},
     body: body ? JSON.stringify(body) : undefined
-  }).then(function(r){ return r.json(); });
+  }).then(function(r){
+    // A 404/500 behind a proxy returns HTML, which makes r.json() reject with
+    // an opaque error. Surface the real status instead of failing silently.
+    return r.json().catch(function(){
+      throw new Error('server returned ' + r.status + ' for ' + path);
+    });
+  });
 }
 
 // ---------- lobby ----------
+// The page may be served from a sub-path (e.g. /tidepool/ behind a reverse
+// proxy). Derive the API base from the current location so requests do not
+// escape to the domain root and 404.
+var BASE = (function(){
+  var p = location.pathname;
+  return p.endsWith('/') ? p : p.replace(/[^/]*$/, '');
+})();
+function apiPath(p){ return BASE + p.replace(/^\//, ''); }
+
 function showPane(which){
   ['paneCreate','paneJoin','paneBot'].forEach(function(id){ $(id).classList.add('hide'); });
   $(which).classList.remove('hide');
@@ -185,41 +218,55 @@ $('mJoin').onclick = function(){ showPane('paneJoin'); };
 $('mBot').onclick = function(){ showPane('paneBot'); };
 
 $('btnCreate').onclick = function(){
+  clearError();
   var name = $('nameCreate').value.trim() || 'Player';
   api('POST','/api/match',{name:name}).then(function(d){
-    if(d.error) return alert(d.error);
+    if(d.error) { showError(d.error); return; }
     S.code = d.code; S.playerId = d.playerId;
     enterWaiting();
-  });
+  }).catch(function(e){ showError('Could not create a match: ' + e.message); });
 };
 $('btnJoin').onclick = function(){
+  clearError();
   var code = $('codeJoin').value.trim().toUpperCase();
   var name = $('nameJoin').value.trim() || 'Player';
-  if(code.length !== 4) return alert('Code must be 4 characters');
+  if(code.length !== 4){ showError('Code must be 4 characters'); return; }
   api('POST','/api/match/'+code+'/join',{name:name}).then(function(d){
-    if(d.error) return alert(d.error);
+    if(d.error) { showError(d.error); return; }
     S.code = d.code; S.playerId = d.playerId;
     enterWaiting();
-  });
+  }).catch(function(e){ showError('Could not join: ' + e.message); });
 };
 $('btnBot').onclick = function(){
+  clearError();
   api('POST','/api/match',{name:'Crab 1'}).then(function(d){
-    if(d.error) return alert(d.error);
+    if(d.error) { showError(d.error); return; }
     S.code = d.code; S.playerId = d.playerId;
-    api('POST','/api/match/'+S.code+'/join',{name:'Crab 2',asBot:true}).then(function(){
-      return api('POST','/api/match/'+S.code+'/join',{name:'Crab 3',asBot:true});
-    }).then(function(){
-      return api('POST','/api/match/'+S.code+'/start',{});
-    }).then(function(){ enterGame(); });
-  });
+    return api('POST','/api/match/'+S.code+'/join',{name:'Crab 2',asBot:true})
+      .then(function(){
+        return api('POST','/api/match/'+S.code+'/join',{name:'Crab 3',asBot:true});
+      })
+      .then(function(){
+        return api('POST','/api/match/'+S.code+'/start',{});
+      })
+      .then(function(){ enterGame(); });
+  }).catch(function(e){ showError('Could not start a bot match: ' + e.message); });
 };
 
 // ---------- waiting ----------
+var waitTimer = null;
 function enterWaiting(){
   $('lobby').classList.add('hide');
   $('waiting').classList.remove('hide');
   $('wCode').textContent = S.code;
   refreshWaiting();
+  // Poll so the player list updates when somebody joins, and so we move to
+  // the game automatically when the host starts the match.
+  if(waitTimer) clearInterval(waitTimer);
+  waitTimer = setInterval(refreshWaiting, 1500);
+}
+function leaveWaiting(){
+  if(waitTimer) { clearInterval(waitTimer); waitTimer = null; }
 }
 function refreshWaiting(){
   api('GET','/api/match/'+S.code).then(function(st){
@@ -229,13 +276,14 @@ function refreshWaiting(){
         '<span class="sw" style="background:'+p.color+'"></span>'+
         '<span class="nm">'+esc(p.name)+(p.isBot?' (bot)':'')+'</span></div>';
     }).join('');
-    if(st.status !== 'lobby') enterGame();
-  });
+    if(st.status !== 'lobby') { leaveWaiting(); enterGame(); }
+  }).catch(function(){ /* match may have been swept; stay put */ });
 }
 $('btnStart').onclick = function(){
   api('POST','/api/match/'+S.code+'/start',{}).then(function(){
+    leaveWaiting();
     enterGame();
-  });
+  }).catch(function(e){ showError('Could not start: ' + e.message); });
 };
 
 // ---------- game ----------
@@ -249,7 +297,7 @@ function enterGame(){
 function connectWs(){
   if(S.ws) { try{S.ws.close();}catch(e){} }
   var proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
-  var ws = new WebSocket(proto + location.host + '/ws/' + S.code);
+  var ws = new WebSocket(proto + location.host + apiPath('/ws/' + S.code));
   S.ws = ws;
   ws.onmessage = function(ev){
     var msg;
@@ -345,9 +393,9 @@ function pick(c){
   api('POST','/api/match/'+S.code+'/action',{
     playerId: S.playerId, action: S.mode, x: c.x, y: c.y
   }).then(function(r){
-    if(r.error) alert(r.error);
+    if(r.error) { showError(r.error); return; }
     refresh();
-  });
+  }).catch(function(e){ showError('Move rejected: ' + e.message); });
 }
 
 $('modeClaim').onclick = function(){ S.mode='claim'; render(); };
