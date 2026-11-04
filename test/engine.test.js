@@ -121,11 +121,31 @@ test('feed on enemy cell fails', () => {
   engine.submitAction(m, 'a', { action: 'claim', x: t.x, y: t.y });
   engine.submitAction(m, 'b', { action: 'claim', x: 0, y: 0 });
   engine.resolveRound(m);
-  engine.submitAction(m, 'b', { action: 'feed', x: t.x, y: t.y });
-  engine.submitAction(m, 'a', { action: 'claim', x: 1, y: 1 });
-  const r = engine.resolveRound(m);
-  const fails = r.events.filter(e => e.type === 'feed_fail' && e.reason === 'not yours');
-  assert.strictEqual(fails.length, 1);
+  // b tries to feed a's cell — rejected at submit time, not at resolve time.
+  const r = engine.submitAction(m, 'b', { action: 'feed', x: t.x, y: t.y });
+  assert.strictEqual(r.ok, false, 'feeding an enemy cell must be rejected');
+  assert.ok(/own/.test(r.error), 'error should mention ownership: ' + r.error);
+  // a's cell is untouched
+  assert.strictEqual(t.owner, 'a');
+  assert.strictEqual(t.score, t.nutrient);
+});
+
+test('double submit is rejected', () => {
+  const m = engine.createMatch({ seed: 3 });
+  engine.addPlayer(m, { id: 'a', name: 'A' });
+  engine.addPlayer(m, { id: 'b', name: 'B' });
+  engine.startMatch(m);
+  const r1 = engine.submitAction(m, 'a', { action: 'claim', x: 2, y: 2 });
+  assert.strictEqual(r1.ok, true);
+  const r2 = engine.submitAction(m, 'a', { action: 'claim', x: 3, y: 3 });
+  assert.strictEqual(r2.ok, false, 'second submit in the same round must be rejected');
+  assert.ok(/already/.test(r2.error), 'error should say already submitted: ' + r2.error);
+  engine.submitAction(m, 'b', { action: 'claim', x: 0, y: 0 });
+  engine.resolveRound(m);
+  const mine = m.cells.filter(c => c.owner === 'a');
+  assert.strictEqual(mine.length, 1, 'the first action must be the one that counts');
+  assert.strictEqual(mine[0].x, 2);
+  assert.strictEqual(mine[0].y, 2);
 });
 
 test('wash erodes a lone cell next to an enemy', () => {

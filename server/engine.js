@@ -85,9 +85,14 @@ function startMatch(m) {
 
 function playerById(m, id) { return m.players.find(p => p.id === id) || null; }
 
+function cellAt(m, x, y) {
+  if (!inBounds(x, y)) return null;
+  return m.cells[idx(x, y)] || null;
+}
+
 function submitAction(m, playerId, action) {
   if (m.status !== 'playing') return { ok: false, error: 'match not playing' };
-  if (m.pending[playerId] && m.pending[playerId].locked) return { ok: false, error: 'already submitted' };
+  if (m.pending[playerId]) return { ok: false, error: 'already submitted' };
   const p = playerById(m, playerId);
   if (!p) return { ok: false, error: 'unknown player' };
 
@@ -99,7 +104,15 @@ function submitAction(m, playerId, action) {
     return { ok: false, error: 'x/y out of bounds' };
   }
 
-  m.pending[playerId] = { action: kind, x, y };
+  const cell = cellAt(m, x, y);
+  if (!cell) return { ok: false, error: 'no such cell' };
+
+  if (kind === 'feed') {
+    // You may only feed a cell you already own.
+    if (cell.owner !== playerId) return { ok: false, error: 'you do not own that cell' };
+  }
+
+  m.pending[playerId] = { action: kind, x, y, locked: true };
   return { ok: true, waiting: countPending(m) < m.players.length };
 }
 
