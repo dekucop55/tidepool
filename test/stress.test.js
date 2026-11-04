@@ -153,7 +153,7 @@ async function main() {
       st = await req('GET', '/api/match/' + code);
       if (st.body.status === 'done') break;
     }
-    const rep = await req('GET', '/api/match/' + code + '/replay');
+    const rep = await req('GET', '/api/match/' + code + '/replay?playerId=' + c.body.playerId);
     const rounds = rep.body.log.filter(e => e.events !== undefined).length;
     assert.strictEqual(rounds, st.body.round,
       'replay rounds ' + rounds + ' != played rounds ' + st.body.round);
@@ -168,8 +168,13 @@ async function main() {
     const c = await req('POST', '/api/match', { name: 'H' });
     await req('POST', '/api/match/' + c.body.code + '/join', { name: 'B', asBot: true });
     await req('POST', '/api/match/' + c.body.code + '/start', {});
-    await sleep(500);
-    const rep = await req('GET', '/api/match/' + c.body.code + '/replay');
+    // Replay is gated until the match ends, so play it out first.
+    for (let i = 0; i < 160; i++) {
+      await sleep(500);
+      const st = await req('GET', '/api/match/' + c.body.code);
+      if (st.body.status === 'done') break;
+    }
+    const rep = await req('GET', '/api/match/' + c.body.code + '/replay?playerId=' + c.body.playerId);
     assert.strictEqual(rep.body.nutrients.length, 25);
     for (const n of rep.body.nutrients) {
       assert.ok(Number.isInteger(n) && n >= 1 && n <= 5, 'bad nutrient ' + n);

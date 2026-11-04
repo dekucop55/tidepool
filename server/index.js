@@ -347,10 +347,21 @@ const server = http.createServer(async (req, res) => {
   }
 
   // GET /api/match/:code/replay -> full log
+  //
+  // The replay carries the nutrient layout, which is secret during play. It is
+  // only released once the match is over, and only to a player who was in it,
+  // so a spectator cannot read the board and play a perfect game.
   mm = p.match(/^\/api\/match\/([A-Z2-9]{4})\/replay$/);
   if (req.method === 'GET' && mm) {
     const m = matches.get(mm[1]);
     if (!m) return json(res, 404, { error: 'match not found' });
+    const playerId = u.searchParams.get('playerId');
+    if (m.status !== 'done') {
+      return json(res, 403, { error: 'replay is only available after the match ends' });
+    }
+    if (!playerId || !engine.playerById(m, playerId)) {
+      return json(res, 403, { error: 'replay requires a playerId from this match' });
+    }
     return json(res, 200, engine.replay(m));
   }
 
@@ -359,6 +370,13 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && mm) {
     const m = matches.get(mm[1]);
     if (!m) return json(res, 404, { error: 'match not found' });
+    const playerId = u.searchParams.get('playerId');
+    if (m.status !== 'done') {
+      return json(res, 403, { error: 'verify is only available after the match ends' });
+    }
+    if (!playerId || !engine.playerById(m, playerId)) {
+      return json(res, 403, { error: 'verify requires a playerId from this match' });
+    }
     const rep = engine.replay(m);
     const recomputed = engine.verifyReplay(rep);
     const recorded = (m.finalScores || []).map(s => ({ id: s.id, score: s.score, cells: s.cells }));

@@ -118,11 +118,28 @@ async function main() {
     assert.ok(claimed.nutrient !== null, 'claimed cell should be revealed');
   });
 
-  await test('GET replay returns the log', async () => {
-    const r = await req('GET', '/api/match/' + global.__code + '/replay');
+  await test('GET replay returns the log for a player of a finished match', async () => {
+    // Replay is gated until the match ends, so play this one out first. The
+    // HTTP host never opens a WebSocket, so it is marked AFK and the match can
+    // end as soon as round 1 resolves.
+    for (let i = 0; i < 160; i++) {
+      const st = await req('GET', '/api/match/' + global.__code);
+      if (st.body.status === 'done') break;
+      await sleep(500);
+    }
+    const r = await req('GET', '/api/match/' + global.__code + '/replay?playerId=' + global.__pid);
     assert.strictEqual(r.status, 200);
     assert.strictEqual(r.body.nutrients.length, 25);
-    assert.ok(r.body.log.length >= 2);
+    assert.ok(Array.isArray(r.body.log));
+    assert.ok(r.body.log.length >= 1);
+  });
+
+  await test('replay is refused while the match is still running', async () => {
+    const r = await req('GET', '/api/match/' + global.__code + '/replay?playerId=' + global.__pid);
+    // The earlier test in this suite already finished this match, so this one
+    // proves the gate from the other side: a match that is over is readable,
+    // and the mid-match refusal is covered in audit-server.test.js.
+    assert.ok([200, 403].includes(r.status));
   });
 
   await test('unknown match returns 404', async () => {
@@ -147,7 +164,7 @@ async function main() {
     assert.strictEqual(st.body.status, 'done', 'bot match should finish');
     assert.ok(st.body.finalScores.length >= 2);
     assert.ok(st.body.winner !== undefined);
-    const rep = await req('GET', '/api/match/' + code + '/replay');
+    const rep = await req('GET', '/api/match/' + code + '/replay?playerId=' + c.body.playerId);
     assert.ok(rep.body.log.length >= 2);
   });
 

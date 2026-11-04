@@ -148,9 +148,9 @@ async function main() {
     }
     assert.strictEqual(st.body.status, 'done');
     // the ticker must have been cleared: no more log growth after a wait
-    const rep1 = await req('GET', '/api/match/' + code + '/replay');
+    const rep1 = await req('GET', '/api/match/' + code + '/replay?playerId=' + c.body.playerId);
     await sleep(1500);
-    const rep2 = await req('GET', '/api/match/' + code + '/replay');
+    const rep2 = await req('GET', '/api/match/' + code + '/replay?playerId=' + c.body.playerId);
     assert.strictEqual(rep2.body.log.length, rep1.body.log.length,
       'a finished match must not keep appending to its log');
   });
@@ -217,11 +217,50 @@ async function main() {
       st = await req('GET', '/api/match/' + code);
       if (st.body.status === 'done') break;
     }
-    const v = await req('GET', '/api/match/' + code + '/verify');
+    const v = await req('GET', '/api/match/' + code + '/verify?playerId=' + c.body.playerId);
     assert.strictEqual(v.body.verified, true,
       're-simulating the replay must reproduce the recorded scores');
     assert.deepStrictEqual(v.body.recomputed, v.body.recorded);
     assert.ok(v.body.rounds > 0);
+  });
+
+  await test('replay and verify are gated: no secret nutrients mid-match, no anonymous access', async () => {
+    const created = await req('POST', '/api/match', { name: 'Gate' });
+    const code = created.body.code;
+    const pid = created.body.playerId;
+    await req('POST', '/api/match/' + code + '/join', { name: 'Bot', asBot: true });
+    await req('POST', '/api/match/' + code + '/start', {});
+
+    // Mid-match the nutrient layout is still secret, so replay must not leak it
+    // to anyone — not even a legitimate player.
+    const mid = await req('GET', '/api/match/' + code + '/replay?playerId=' + pid);
+    assert.strictEqual(mid.status, 403);
+    assert.ok(!mid.body.nutrients, 'nutrients must not be exposed before the match ends');
+
+    // An anonymous caller must not get the board either.
+    const anon = await req('GET', '/api/match/' + code + '/replay');
+    assert.strictEqual(anon.status, 403);
+
+    // A bogus playerId must not pass as a participant.
+    const bogus = await req('GET', '/api/match/' + code + '/replay?playerId=hoax');
+    assert.strictEqual(bogus.status, 403);
+
+    // Let it finish, then a real player can verify the result.
+    for (let i = 0; i < 120; i++) {
+      const st = await req('GET', '/api/match/' + code);
+      if (st.body.status === 'done') break;
+      await new Promise(r => setTimeout(r, 500));
+    }
+    const after = await req('GET', '/api/match/' + code + '/replay?playerId=' + pid);
+    assert.strictEqual(after.status, 200);
+    assert.ok(Array.isArray(after.body.nutrients) && after.body.nutrients.length === 25);
+
+    const v = await req('GET', '/api/match/' + code + '/verify?playerId=' + pid);
+    assert.strictEqual(v.status, 200);
+    assert.strictEqual(v.body.verified, true);
+
+    const vAnon = await req('GET', '/api/match/' + code + '/verify');
+    assert.strictEqual(vAnon.status, 403);
   });
 
   console.log('\n' + passed + ' passed, ' + failed + ' failed\n');

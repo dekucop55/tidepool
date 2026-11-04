@@ -133,16 +133,20 @@ The round resolves as soon as every connected player has submitted. Poll
 
 ### 6. Replay and verify
 
+Both endpoints are gated: the nutrient layout is secret while a match is
+running, so they only answer **after the match ends**, and only for a
+`playerId` that was in that match. Anyone else gets `403`.
+
 ```bash
 # full log: seed, nutrient layout, and every action each player took
-curl .../api/match/CODE/replay
+curl ".../api/match/CODE/replay?playerId=p_abc123"
 
 # re-simulate the match from the replay and check it against the recorded result
-curl .../api/match/CODE/verify
+curl ".../api/match/CODE/verify?playerId=p_abc123"
 ```
 
 ```json
-{ "code": "7VR9", "verified": true, "rounds": 20,
+{ "code": "7VR9", "verified": true, "rounds": 12,
   "recorded":   [{"id":"p_a","score":31,"cells":6},{"id":"p_b","score":24,"cells":5}],
   "recomputed": [{"id":"p_a","score":31,"cells":6},{"id":"p_b","score":24,"cells":5}] }
 ```
@@ -160,8 +164,8 @@ scores match the recorded ones exactly.
 | `POST` | `/api/match/:code/start` | start (fills empty seats with bots) |
 | `GET` | `/api/match/:code` | public state |
 | `POST` | `/api/match/:code/action` | submit `claim` or `feed` |
-| `GET` | `/api/match/:code/replay` | seed + nutrients + full log (with every action) |
-| `GET` | `/api/match/:code/verify` | re-simulates the replay and reports whether it matches |
+| `GET` | `/api/match/:code/replay` | seed + nutrients + full log — **only after the match ends, and only for a player who was in it** (`?playerId=...`) |
+| `GET` | `/api/match/:code/verify` | re-simulates the replay and reports whether it matches — same gating as `replay` |
 | `GET` | `/health` | liveness |
 
 ### Agent etiquette
