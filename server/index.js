@@ -46,12 +46,31 @@ function wsDecode(buf) {
   if (buf.length < 2) return null;
   const opcode = buf[0] & 0x0f;
   if (opcode === 0x8) return { type: 'close' };
+  // Client frames are always masked (RFC 6455 §5.1). Unmask before reading.
+  const masked = (buf[1] & 0x80) !== 0;
   let len = buf[1] & 0x7f;
   let offset = 2;
-  if (len === 126) { len = buf.readUInt16BE(2); offset = 4; }
-  else if (len === 127) { len = Number(buf.readBigUInt64BE(2)); offset = 10; }
-  const data = buf.slice(offset, offset + len).toString('utf8');
-  return { type: 'text', data };
+  if (len === 126) {
+    if (buf.length < 4) return null;
+    len = buf.readUInt16BE(2); offset = 4;
+  } else if (len === 127) {
+    if (buf.length < 10) return null;
+    len = Number(buf.readBigUInt64BE(2)); offset = 10;
+  }
+  if (masked) {
+    if (buf.length < offset + 4) return null;
+    offset += 4; // skip the 4-byte masking key, handled below
+  }
+  if (buf.length < offset + len) return null; // incomplete frame
+  const payload = Buffer.from(buf.slice(offset, offset + len));
+  if (masked) {
+    const maskKey = buf.slice(offset - 4, offset);
+    for (let i = 0; i < payload.length; i++) payload[i] ^= maskKey[i % 4];
+  }
+  // ping (0x9) / pong (0xA) carry no game payload
+  if (opcode === 0x9) return { type: 'ping' };
+  if (opcode === 0xA) return { type: 'pong' };
+  return { type: 'text', data: payload.toString('utf8') };
 }
 
 function broadcast(code, obj) {
@@ -59,7 +78,14 @@ function broadcast(code, obj) {
   if (!set) return;
   const msg = wsEncode(JSON.stringify(obj));
   for (const ws of set) {
-    try { ws.write(msg); } catch (_) {}
+    // A full socket buffer makes write() return false and drop data silently.
+    // Pause and resume on drain instead of pretending the send succeeded.
+    try {
+      if (ws.write(msg) === false && !ws._paused) {
+        ws._paused = true;
+        ws.once('drain', () => { ws._paused = false; });
+      }
+    } catch (_) {}
   }
 }
 
@@ -92,13 +118,47 @@ function readBody(req) {
 
 function newCode() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  let c;
-  do {
-    c = '';
+  for (let attempt = 0; attempt < 1000; attempt++) {
+    let c = '';
     for (let i = 0; i < 4; i++) c += chars[Math.floor(Math.random() * chars.length)];
-  } while (matches.has(c));
+    if (!matches.has(c)) return c;
+  }
+  // Space is exhausted (or astronomically unlucky). Widen rather than spin.
+  let c = '';
+  for (let i = 0; i < 6; i++) c += chars[Math.floor(Math.random() * chars.length)];
   return c;
 }
+
+// --- match lifecycle ---
+// Matches are held in memory only. Without an expiry, a match that is created
+// but never started (or abandoned mid-game) leaks forever, and its lobby entry
+// is never reclaimed. Sweep anything that is done or has sat in the lobby
+// untouched for LOBBY_TTL_MS.
+const LOBBY_TTL_MS = 60 * 60 * 1000; // 1 hour in the lobby
+const DONE_TTL_MS = 30 * 60 * 1000;  // 30 minutes after finishing
+const SWEEP_MS = 5 * 60 * 1000;      // check every 5 minutes
+
+function destroyMatch(m) {
+  if (!m) return;
+  if (m._tick) { clearInterval(m._tick); m._tick = null; }
+  if (m._afkTimer) { clearTimeout(m._afkTimer); m._afkTimer = null; }
+  matches.delete(m.code);
+  sockets.delete(m.code);
+}
+
+function sweepMatches() {
+  const now = Date.now();
+  for (const m of matches.values()) {
+    if (m.status === 'done' && now - (m._finishedAt || now) > DONE_TTL_MS) {
+      console.log('sweeping finished match ' + m.code);
+      destroyMatch(m);
+    } else if (m.status === 'lobby' && now - m._createdAt > LOBBY_TTL_MS) {
+      console.log('sweeping abandoned lobby ' + m.code);
+      destroyMatch(m);
+    }
+  }
+}
+setInterval(sweepMatches, SWEEP_MS).unref();
 
 function fillBots(m) {
   // Fill empty seats with bots after a short delay so humans can join first.
@@ -158,6 +218,7 @@ function maybeRunBots(m) {
     const result = engine.resolveRound(m);
     broadcast(m.code, { type: 'round', result, state: engine.publicState(m) });
     if (m.status === 'done') {
+      m._finishedAt = Date.now();
       broadcast(m.code, { type: 'end', state: engine.publicState(m) });
       if (m._tick) { clearInterval(m._tick); m._tick = null; }
     } else {
@@ -198,6 +259,7 @@ const server = http.createServer(async (req, res) => {
     const body = await readBody(req).catch(() => ({}));
     const code = newCode();
     const m = engine.createMatch({ code });
+    m._createdAt = Date.now();
     const pid = 'p_' + crypto.randomBytes(5).toString('hex');
     engine.addPlayer(m, { id: pid, name: (body.name || 'Player').slice(0, 24) });
     matches.set(code, m);
@@ -282,7 +344,12 @@ server.on('upgrade', (req, socket) => {
   sockets.get(code).add(socket);
   socket.on('data', buf => {
     const msg = wsDecode(buf);
-    if (msg && msg.type === 'close') { socket.destroy(); }
+    if (!msg) return;
+    if (msg.type === 'close') { socket.destroy(); return; }
+    if (msg.type === 'ping') {
+      // Answer a ping with a pong so the connection is not dropped.
+      try { socket.write(Buffer.from([0x8a, 0x00])); } catch (_) {}
+    }
   });
   socket.on('close', () => {
     const set = sockets.get(code);

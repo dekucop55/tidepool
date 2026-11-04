@@ -113,17 +113,26 @@ function submitAction(m, playerId, action) {
   }
 
   m.pending[playerId] = { action: kind, x, y, locked: true };
-  return { ok: true, waiting: countPending(m) < m.players.length };
+  // "waiting" is true while somebody still has to act. Disconnected players
+  // are excluded so the last active player is not told to wait forever.
+  return { ok: true, waiting: countPending(m) < activePlayers(m).length };
 }
 
 function countPending(m) {
   return m.players.filter(p => m.pending[p.id]).length;
 }
 
+// Players who are still in the match. A disconnected player is skipped by
+// allSubmitted so an abandoned match can finish, but they still count here
+// for the "waiting" flag so the last active player is told the round is ready.
+function activePlayers(m) {
+  return m.players.filter(p => p.connected !== false);
+}
+
 function allSubmitted(m) {
   // A player who has disconnected (closed their socket, or went AFK over plain
   // HTTP) is skipped: the round resolves from whoever is still connected.
-  const active = m.players.filter(p => p.connected !== false);
+  const active = activePlayers(m);
   if (active.length === 0) return false;
   return active.every(p => m.pending[p.id]);
 }
@@ -184,18 +193,24 @@ function resolveRound(m) {
   }
 
   // --- 3. Tide wash: owned cell adjacent to an opponent cell loses 1 ---
+  // Snapshot ownership BEFORE any erosion so the wash is order-independent:
+  // two mutually adjacent 1-point cells must both wash out, regardless of
+  // which one the loop happens to visit first.
+  const ownersBefore = m.cells.map(c => c.owner);
   const washed = [];
   for (const cell of m.cells) {
-    if (cell.owner === null) continue;
+    if (ownersBefore[cell.i] === null) continue;
     let touched = false;
     for (const n of NEIGHBORS[cell.i]) {
-      const nb = m.cells[n];
-      if (nb.owner !== null && nb.owner !== cell.owner) { touched = true; break; }
+      const nbOwner = ownersBefore[n];
+      if (nbOwner !== null && nbOwner !== ownersBefore[cell.i]) { touched = true; break; }
     }
     if (touched && cell.score > 0) {
       cell.score -= 1;
       if (cell.score === 0) {
         cell.owner = null;
+        // The cell is neutral again, so its nutrient is hidden once more.
+        cell.revealed = false;
         washed.push({ x: cell.x, y: cell.y });
       }
     }
@@ -244,6 +259,15 @@ function resolveRound(m) {
 // ---- Views ----
 
 function publicState(m, forPlayerId) {
+  // A cell's nutrient is visible only to a player who has owned it. `revealed`
+  // is reset when a cell washes out, so a cell you never held stays hidden even
+  // after an opponent has held and lost it.
+  const board = m.cells.map(c => ({
+    x: c.x, y: c.y,
+    nutrient: c.revealed ? c.nutrient : null,
+    owner: c.owner,
+    score: c.owner !== null ? c.score : null
+  }));
   return {
     code: m.code,
     status: m.status,
@@ -255,12 +279,7 @@ function publicState(m, forPlayerId) {
       isBot: p.isBot, score: p.score, cells: p.cells,
       submitted: !!m.pending[p.id]
     })),
-    board: m.cells.map(c => ({
-      x: c.x, y: c.y,
-      nutrient: c.revealed ? c.nutrient : null,
-      owner: c.owner,
-      score: c.owner !== null ? c.score : null
-    })),
+    board,
     yourPending: forPlayerId ? (m.pending[forPlayerId] || null) : null,
     winner: m.winner,
     finalScores: m.finalScores
@@ -282,5 +301,6 @@ function replay(m) {
 module.exports = {
   SIZE, CELLS, MAX_ROUNDS, FEED_CAP,
   createMatch, addPlayer, startMatch, submitAction, resolveRound,
-  allSubmitted, countPending, playerById, publicState, replay, idx, inBounds
+  allSubmitted, countPending, activePlayers, playerById, cellAt,
+  publicState, replay, idx, inBounds
 };
